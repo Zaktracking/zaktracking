@@ -1,0 +1,282 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
+// enough when changing adapters.
+// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
+datasource db {
+  provider  = "postgresql"
+  // The app runs through Neon's pooler: a web server opens and closes
+  // connections all day, and the pooler is what keeps the database from
+  // running out of them.
+  url       = env("DATABASE_URL")
+  // Migrations cannot go through the pooler - they need advisory locks
+  // and DDL that PgBouncer does not pass through. So they take the
+  // direct endpoint instead.
+  directUrl = env("DIRECT_URL")
+}
+
+model Session {
+  id            String    @id
+  shop          String
+  state         String
+  isOnline      Boolean   @default(false)
+  scope         String?
+  expires       DateTime?
+  accessToken   String
+  userId        BigInt?
+  firstName     String?
+  lastName      String?
+  email         String?
+  accountOwner  Boolean   @default(false)
+  locale        String?
+  collaborator  Boolean?  @default(false)
+  emailVerified Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+// ============================================================================
+//  ZakTracking models
+//
+//  Paste this whole block at the very BOTTOM of prisma/schema.prisma.
+//  Leave the Session model and the datasource/generator above it alone.
+//
+//  Then run:   npx prisma migrate dev --name zaktracking
+// ============================================================================
+
+
+/// One row per merchant store. All settings and API keys live here.
+model Shop {
+  id          String   @id @default(cuid())
+  domain      String   @unique
+  installedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // --- WhatsApp (Meta Cloud API) ---
+  waEnabled       Boolean @default(false)
+  waPhoneNumberId String?
+  waWabaId        String?
+  waToken         String?
+
+  // --- SMS (phase 2 - after DLT registration in India) ---
+  smsEnabled  Boolean @default(false)
+  smsApiKey   String?
+  smsSenderId String?
+
+  // --- courier tracking (17TRACK) ---
+  trackApiKey String?
+
+  // --- which messages are turned on ---
+  onOrderCreate    Boolean @default(true)
+  onOrderPaid      Boolean @default(true)
+  onFulfilled      Boolean @default(true)
+  onOutForDelivery Boolean @default(true)
+  onDelivered      Boolean @default(true)
+  onCancelled      Boolean @default(true)
+  onAbandoned      Boolean @default(false)
+  codConfirm       Boolean @default(true)
+
+  orders    OrderRecord[]
+  templates Template[]
+  messages  MessageLog[]
+  carts     AbandonedCart[]
+
+  /// Discount code for the second abandoned-cart reminder.
+  /// If it is empty the second reminder is not sent at all - better than a fake code.
+  abandonCode String?
+}
+
+
+/// Our own copy of every order, so we never have to ask Shopify again.
+model OrderRecord {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  shopifyId   String
+  orderNumber String
+  customerName String?
+  phone        String?
+  email        String?
+  totalPrice   String?
+  currency     String?
+  financial    String?
+  gateway      String?
+
+  /// COD or prepaid. Needed as a guard on orders/paid - a COD order also
+  /// fires paid, but only when the courier deposits the cash.
+  isCod        Boolean   @default(false)
+  /// null = not asked yet, true = confirmed, false = declined
+  codConfirmed Boolean?
+  cancelledAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  shipments Shipment[]
+  messages  MessageLog[]
+
+  @@unique([shopId, shopifyId])
+  @@index([shopId, createdAt])
+
+  /// "Portable Blender + 1 more item" - when a courier update arrives we do
+  /// not have Shopify's payload, so we keep it here.
+  itemLine String?
+  city    String?
+  address String?
+}
+
+
+/// One order can have several parcels. Each parcel gets its own row.
+model Shipment {
+  id      String      @id @default(cuid())
+  orderId String
+  order   OrderRecord @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  fulfillmentId String
+  trackingNo    String?
+  carrier       String?
+  /// 17TRACK courier code
+  carrierCode   String?
+  trackUrl      String?
+
+  /// pending | info_received | in_transit | out_for_delivery
+  /// | delivered | exception | returned
+  status      String    @default("pending")
+  lastEventAt DateTime?
+
+  /// whether it has been registered with the tracking API
+  registered Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orderId, fulfillmentId])
+  @@index([trackingNo])
+
+  /// 17TRACK sub_status - e.g. "DeliveryFailure_NoBody"
+  subStatus     String?
+  lastEventDesc String?
+  lastEventLoc  String?
+  /// The whole journey as JSON - the tracking page is built from this
+  scans         String?
+  /// How many registration attempts have been made. We give up after 5.
+  regTries      Int     @default(0)
+}
+
+
+/// Every message we send. unique([orderId, event, channel]) is the one thing
+/// that stops the same customer getting "your order has shipped" twice.
+model MessageLog {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  orderId String?
+  order   OrderRecord? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  /// whatsapp | sms
+  channel String
+  /// order_created | cod_confirm | order_paid | shipped
+  /// | out_for_delivery | delivered | cancelled | abandoned_1 | abandoned_2
+  event String
+  to    String
+  body  String
+
+  /// queued | sent | failed
+  status     String  @default("queued")
+  providerId String?
+  error      String?
+
+  sentAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@unique([orderId, event, channel])
+  @@index([shopId, createdAt])
+  @@index([status])
+}
+
+
+/// Where the merchant edits the text of their own messages.
+model Template {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  event   String
+  channel String
+  enabled Boolean @default(true)
+  body    String
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([shopId, event, channel])
+}
+
+
+/// Abandoned cart. checkouts/update fires 10-15 times for one shopper, so we
+/// upsert on the token and keep pushing lastSeenAt forward.
+/// The moment an order arrives we fill convertedAt - then no reminder goes out.
+model AbandonedCart {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  token      String
+  phone      String?
+  name       String?
+  recoverUrl String?
+  total      String?
+  currency   String?
+  itemCount  Int     @default(0)
+
+  lastSeenAt  DateTime  @default(now())
+  reminder1At DateTime?
+  reminder2At DateTime?
+  convertedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@unique([shopId, token])
+  @@index([shopId, lastSeenAt])
+}
+
+
+/// Shopify sends the same webhook two or three times (retries, network
+/// glitches). Each delivery carries a unique id - remembering it is the
+/// cheapest way to make every handler idempotent.
+model WebhookEvent {
+  id         String   @id
+  topic      String
+  shop       String
+  receivedAt DateTime @default(now())
+
+  @@index([shop, topic])
+}
+
+// ============================================================================
+//  Phase 2 - two changes
+//
+//  1. A WABA ID field on Shop (to read the template list)
+//  2. An OptOut table (to honour STOP)
+//
+//  The script adds both - nothing to do by hand.
+// ============================================================================
+
+/// Anyone who replies STOP lands here. Checked before every send.
+/// The promise in the footer is only true if we honour it.
+model OptOut {
+  id     String @id @default(cuid())
+  shopId String
+  phone  String
+
+  createdAt DateTime @default(now())
+
+  @@unique([shopId, phone])
+  @@index([shopId])
+}

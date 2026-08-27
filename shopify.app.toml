@@ -1,0 +1,130 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+#
+# ZakTracking - WhatsApp + SMS order notifications and a branded
+# real-time tracking page.
+#
+# After any edit here, run:  shopify app deploy
+
+client_id       = "da99a2a7c41eeabedc43e5adff32615b"
+name            = "ZakTracking- Whatsapp"
+handle          = "zaktracking-whatsapp"
+application_url = "https://example.com"
+embedded        = true
+
+[build]
+automatically_update_urls_on_dev = true
+include_config_on_deploy         = true
+
+
+# ------------------------------------------------------------------------------
+#  Access scopes - only what the app actually needs. Every extra scope slows
+#  app review down and makes merchants hesitate on the install screen.
+# ------------------------------------------------------------------------------
+[access_scopes]
+# read_orders       -> Order, Fulfillment, OrderTransaction, AbandonedCheckout
+# write_orders      -> tag the order back when COD is confirmed or refused
+# read_checkouts    -> the checkouts/* webhooks behind abandoned-cart recovery
+# read_fulfillments -> required by fulfillments/create and fulfillments/update
+# read_customers    -> the phone number WhatsApp and SMS are sent to
+# read_products     -> product title and image inside messages and on the page
+# write_app_proxy   -> serve the tracking page under the merchant's own domain
+scopes = "read_orders,write_orders,read_checkouts,read_fulfillments,read_customers,read_products,write_app_proxy"
+optional_scopes = [ ]
+use_legacy_install_flow = false
+
+
+[auth]
+redirect_urls = [ "https://example.com/auth/callback" ]
+
+
+# ------------------------------------------------------------------------------
+#  App proxy - this is what puts the tracking page on the MERCHANT's domain
+#  instead of ours:
+#
+#      zakdor.com/apps/track   ->   https://our-app.com/proxy/track
+#
+#  The shopper never leaves the store, so the page keeps the store's own
+#  theme, fonts and colours. Merchants can rename the subpath later under
+#  Settings > Apps > this app > App proxy, so never hardcode /apps/track in
+#  our own links - read it back from the Shop record instead.
+# ------------------------------------------------------------------------------
+[app_proxy]
+url     = "/proxy/track"
+prefix  = "apps"      # allowed values: a | apps | community | tools
+subpath = "track"
+
+
+# ------------------------------------------------------------------------------
+#  Webhooks - every message the app sends starts life as one of these.
+#
+#  The one thing most people get wrong: Shopify does NOT emit "out for
+#  delivery" or "delivered". Those statuses belong to the courier. Register
+#  the tracking number with a tracking API (17TRACK gives 200 free trial
+#  credits, then pushes every later status back at no extra cost) and send
+#  those two messages from ITS webhook, never from anything below.
+# ------------------------------------------------------------------------------
+[webhooks]
+api_version = "2026-07"
+
+  # --- lifecycle (required) ---
+  [[webhooks.subscriptions]]
+  uri    = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
+
+  [[webhooks.subscriptions]]
+  uri    = "/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
+
+  # --- order placed -> "we have your order" + the one-tap COD confirm buttons
+  [[webhooks.subscriptions]]
+  uri    = "/webhooks/orders/create"
+  topics = [ "orders/create" ]
+
+  # --- payment received -> prepaid orders only.
+  #     Guard this in code: a COD order fires orders/paid too, weeks later,
+  #     when the courier remits the cash. A "payment received" message then
+  #     reads as spam. Check the gateway before sending.
+  [[webhooks.subscriptions]]
+  uri    = "/webhooks/orders/paid"
+  topics = [ "orders/paid" ]
+
+  # --- shipped -> the tracking link. The single most valuable message.
+  [[webhooks.subscriptions]]
+  uri    = "/webhooks/orders/fulfilled"
+  topics = [ "orders/fulfilled", "orders/partially_fulfilled" ]
+
+  # --- tracking number added or changed -> register it with the tracking API
+  [[webhooks.subscriptions]]
+  uri    = "/webhooks/fulfillments"
+  topics = [ "fulfillments/create", "fulfillments/update" ]
+
+  # --- cancelled ---
+  [[webhooks.subscriptions]]
+  uri    = "/webhooks/orders/cancelled"
+  topics = [ "orders/cancelled" ]
+
+  # --- abandoned cart -> reminder 1 after ~1h, reminder 2 after ~24h.
+  #     checkouts/update fires ten to fifteen times for a single shopper.
+  #     Debounce on the checkout token, and cancel the whole sequence the
+  #     moment orders/create arrives for it - otherwise someone who just
+  #     bought gets told their cart is waiting.
+  [[webhooks.subscriptions]]
+  uri    = "/webhooks/checkouts"
+  topics = [ "checkouts/create", "checkouts/update" ]
+
+  # --- GDPR. Mandatory for any public app. App review fails without them.
+  [[webhooks.subscriptions]]
+  uri               = "/webhooks/customers/data_request"
+  compliance_topics = [ "customers/data_request" ]
+
+  [[webhooks.subscriptions]]
+  uri               = "/webhooks/customers/redact"
+  compliance_topics = [ "customers/redact" ]
+
+  [[webhooks.subscriptions]]
+  uri               = "/webhooks/shop/redact"
+  compliance_topics = [ "shop/redact" ]
+
+
+[pos]
+embedded = false

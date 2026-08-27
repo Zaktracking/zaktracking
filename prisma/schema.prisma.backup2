@@ -1,0 +1,233 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
+// enough when changing adapters.
+// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
+datasource db {
+  provider = "sqlite"
+  url      = "file:dev.sqlite"
+}
+
+model Session {
+  id            String    @id
+  shop          String
+  state         String
+  isOnline      Boolean   @default(false)
+  scope         String?
+  expires       DateTime?
+  accessToken   String
+  userId        BigInt?
+  firstName     String?
+  lastName      String?
+  email         String?
+  accountOwner  Boolean   @default(false)
+  locale        String?
+  collaborator  Boolean?  @default(false)
+  emailVerified Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+// ============================================================================
+//  ZakTracking models
+//
+//  Ye poora block apni  prisma/schema.prisma  ke SABSE NEECHE paste kar do.
+//  Upar ka Session model aur datasource/generator ko haath mat lagana.
+//
+//  Paste karke chalao:   npx prisma migrate dev --name zaktracking
+// ============================================================================
+
+
+/// Ek row per merchant store. Saari settings aur API keys yahin.
+model Shop {
+  id          String   @id @default(cuid())
+  domain      String   @unique
+  installedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // --- WhatsApp (Meta Cloud API) ---
+  waEnabled       Boolean @default(false)
+  waPhoneNumberId String?
+  waToken         String?
+
+  // --- SMS (phase 2 - India me DLT registration ke baad) ---
+  smsEnabled  Boolean @default(false)
+  smsApiKey   String?
+  smsSenderId String?
+
+  // --- courier tracking (17TRACK) ---
+  trackApiKey String?
+
+  // --- kaunsa message ON hai ---
+  onOrderCreate    Boolean @default(true)
+  onOrderPaid      Boolean @default(true)
+  onFulfilled      Boolean @default(true)
+  onOutForDelivery Boolean @default(true)
+  onDelivered      Boolean @default(true)
+  onCancelled      Boolean @default(true)
+  onAbandoned      Boolean @default(false)
+  codConfirm       Boolean @default(true)
+
+  orders    OrderRecord[]
+  templates Template[]
+  messages  MessageLog[]
+  carts     AbandonedCart[]
+}
+
+
+/// Har order ki apni copy. Shopify se dobara poochhne ki zaroorat na pade.
+model OrderRecord {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  shopifyId   String
+  orderNumber String
+  customerName String?
+  phone        String?
+  email        String?
+  totalPrice   String?
+  currency     String?
+  financial    String?
+  gateway      String?
+
+  /// COD hai ya prepaid. orders/paid pe guard lagane ke liye zaroori -
+  /// COD order bhi paid firing karta hai, courier ke cash jama karne par.
+  isCod        Boolean   @default(false)
+  /// null = abhi poochha nahi, true = confirm, false = mana kar diya
+  codConfirmed Boolean?
+  cancelledAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  shipments Shipment[]
+  messages  MessageLog[]
+
+  @@unique([shopId, shopifyId])
+  @@index([shopId, createdAt])
+}
+
+
+/// Ek order ke kai parcel ho sakte hain. Har parcel ki apni row.
+model Shipment {
+  id      String      @id @default(cuid())
+  orderId String
+  order   OrderRecord @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  fulfillmentId String
+  trackingNo    String?
+  carrier       String?
+  /// 17TRACK ka courier code
+  carrierCode   String?
+  trackUrl      String?
+
+  /// pending | info_received | in_transit | out_for_delivery
+  /// | delivered | exception | returned
+  status      String    @default("pending")
+  lastEventAt DateTime?
+
+  /// tracking API me register ho chuka hai ya nahi
+  registered Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orderId, fulfillmentId])
+  @@index([trackingNo])
+}
+
+
+/// Har bheja gaya message. unique([orderId, event, channel]) hi wo cheez hai
+/// jo ek hi customer ko do baar "aapka order ship ho gaya" bhejne se rokti hai.
+model MessageLog {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  orderId String?
+  order   OrderRecord? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  /// whatsapp | sms
+  channel String
+  /// order_created | cod_confirm | order_paid | shipped
+  /// | out_for_delivery | delivered | cancelled | abandoned_1 | abandoned_2
+  event String
+  to    String
+  body  String
+
+  /// queued | sent | failed
+  status     String  @default("queued")
+  providerId String?
+  error      String?
+
+  sentAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@unique([orderId, event, channel])
+  @@index([shopId, createdAt])
+  @@index([status])
+}
+
+
+/// Merchant apne message ka text yahan badalta hai.
+model Template {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  event   String
+  channel String
+  enabled Boolean @default(true)
+  body    String
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([shopId, event, channel])
+}
+
+
+/// Chhoda hua cart. checkouts/update ek hi shopper pe 10-15 baar aata hai,
+/// isliye token pe upsert karte hain aur lastSeenAt aage badhate rehte hain.
+/// Order aate hi convertedAt bhar dete hain - phir reminder nahi jaata.
+model AbandonedCart {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  token      String
+  phone      String?
+  name       String?
+  recoverUrl String?
+  total      String?
+  currency   String?
+  itemCount  Int     @default(0)
+
+  lastSeenAt  DateTime  @default(now())
+  reminder1At DateTime?
+  reminder2At DateTime?
+  convertedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@unique([shopId, token])
+  @@index([shopId, lastSeenAt])
+}
+
+
+/// Shopify ek hi webhook do-teen baar bhej deta hai (retry, ya network glitch).
+/// Har delivery ke saath ek unique id aati hai - use yaad rakhna hi sabse
+/// sasta tareeka hai har handler ko idempotent banane ka.
+model WebhookEvent {
+  id         String   @id
+  topic      String
+  shop       String
+  receivedAt DateTime @default(now())
+
+  @@index([shop, topic])
+}
