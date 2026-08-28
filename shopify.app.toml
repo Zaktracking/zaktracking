@@ -8,12 +8,11 @@
 client_id       = "da99a2a7c41eeabedc43e5adff32615b"
 name            = "ZakTracking- Whatsapp"
 handle          = "zaktracking-whatsapp"
-application_url = "https://example.com"
+application_url = "https://zaktracking.onrender.com"
 embedded        = true
 
 [build]
 automatically_update_urls_on_dev = true
-include_config_on_deploy         = true
 
 
 # ------------------------------------------------------------------------------
@@ -34,7 +33,7 @@ use_legacy_install_flow = false
 
 
 [auth]
-redirect_urls = [ "https://example.com/auth/callback" ]
+redirect_urls = [ "https://zaktracking.onrender.com/auth/callback" ]
 
 
 # ------------------------------------------------------------------------------

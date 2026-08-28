@@ -123,7 +123,7 @@ export function eventEnabled(shop: any, event: string): boolean {
     cod_confirmed: "codConfirm",
     order_paid: "onOrderPaid",
     shipped: "onFulfilled",
-    in_transit: "onFulfilled",
+    in_transit: "onInTransit",
     out_for_delivery: "onOutForDelivery",
     delivery_failed: "onOutForDelivery",
     rto_alert: "onOutForDelivery",

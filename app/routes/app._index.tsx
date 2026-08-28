@@ -103,6 +103,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         codConfirm: on("codConfirm"),
         onOrderPaid: on("onOrderPaid"),
         onFulfilled: on("onFulfilled"),
+        onInTransit: on("onInTransit"),
         onOutForDelivery: on("onOutForDelivery"),
         onDelivered: on("onDelivered"),
         onCancelled: on("onCancelled"),
@@ -366,6 +367,8 @@ export default function Index() {
             help="This prevents the most RTO. A callback URL is needed to receive the button reply — that is still pending." />
           <Check label="Payment received (prepaid only)" name="onOrderPaid" defaultChecked={shop.onOrderPaid} />
           <Check label="Shipped + tracking" name="onFulfilled" defaultChecked={shop.onFulfilled} />
+          <Check label="In transit" name="onInTransit" defaultChecked={shop.onInTransit}
+            help="Goes out once per order, the first time the courier scans it in transit - not on every hub. Worth turning on only for long routes, where it reassures. On a three-day delivery it lands right after the shipped message and reads as a repeat." />
           <Check label="Out for delivery" name="onOutForDelivery" defaultChecked={shop.onOutForDelivery}
             help="This will not arrive without 17TRACK — Shopify does not send this status" />
           <Check label="Delivered" name="onDelivered" defaultChecked={shop.onDelivered}

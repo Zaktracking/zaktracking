@@ -75,6 +75,9 @@ model Shop {
   onOrderCreate    Boolean @default(true)
   onOrderPaid      Boolean @default(true)
   onFulfilled      Boolean @default(true)
+  /// Off by default. It fires once per order, on the first in-transit scan,
+  /// which on a short route lands moments after the shipped message.
+  onInTransit      Boolean @default(false)
   onOutForDelivery Boolean @default(true)
   onDelivered      Boolean @default(true)
   onCancelled      Boolean @default(true)
