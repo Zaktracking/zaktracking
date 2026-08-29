@@ -3,6 +3,7 @@ import db from "../db.server";
 import { authenticate } from "../shopify.server";
 import { shopFromProxy, esc, liquid } from "../lib/proxy.server";
 import { STATUS_LABEL } from "../lib/track.server";
+import { money } from "../lib/templates.server";
 
 /**
  * The actual tracking page - zakdor.com/apps/track
@@ -22,6 +23,23 @@ import { STATUS_LABEL } from "../lib/track.server";
  */
 
 const STEPS = ["Confirmed", "Shipped", "In transit", "Out for delivery", "Delivered"];
+
+/**
+ * How much cash the customer still owes, or null if nothing is due.
+ *
+ * The COD flag alone is not enough. A partial-payment COD app can create the
+ * order with no gateway name at all, and an order written before that was
+ * understood is still sitting in the database with isCod false. The balance
+ * is the fact that matters: if money is outstanding, it is collected at the
+ * door, whatever the flag says.
+ */
+function cashDue(rec: any): string | null {
+  const out = Number(rec?.outstanding);
+  if (Number.isFinite(out) && out > 0) return String(rec.outstanding);
+  if (!rec?.isCod) return null;
+  const total = Number(rec?.totalPrice);
+  return Number.isFinite(total) && total > 0 ? String(rec.totalPrice) : null;
+}
 
 const STEP_OF: Record<string, number> = {
   pending: 1,
@@ -61,7 +79,7 @@ const CSS = `
 .zt-in
 {width:100%;box-sizing:border-box;padding:12px 14px;border:1px solid #d3d5da !important;border-radius:10px;font-size:15px;background:#fff !important;color:#16181d !important}
 .zt-in::placeholder
-{color:#8a8d94 !important;opacity:1}
+{color:#9aa0a8 !important;opacity:1;font-style:italic}
 .zt-in:focus
 {outline:none;border-color:#16181d;box-shadow:0 0 0 3px rgba(22,24,29,.08)}
 .zt-btn
@@ -160,11 +178,11 @@ function form(order = "", pin = "", err = "") {
     <form method="get" action="/apps/track" class="zt-form">
       <div class="zt-f">
         <label class="zt-lab" for="zt-o">Order number</label>
-        <input class="zt-in" id="zt-o" name="order" value="${esc(order)}" placeholder="Z1005" required>
+        <input class="zt-in" id="zt-o" name="order" value="${esc(order)}" placeholder="e.g. Z1001" autocomplete="off" required>
       </div>
       <div class="zt-f">
         <label class="zt-lab" for="zt-p">Phone - last 4 digits</label>
-        <input class="zt-in" id="zt-p" name="pin" value="${esc(pin)}" placeholder="8695" inputmode="numeric" maxlength="4" required>
+        <input class="zt-in" id="zt-p" name="pin" value="${esc(pin)}" placeholder="e.g. 8695" inputmode="numeric" maxlength="4" autocomplete="off" required>
       </div>
       <button class="zt-btn" type="submit">Track</button>
     </form>
@@ -256,7 +274,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   } else if (st === "returned") {
     note = `<div class="zt-note zt-bad">The parcel is on its way back to us. We can send it out again if you want - just message us.</div>`;
   } else if (st === "out_for_delivery") {
-    note = `<div class="zt-note zt-good">It should reach you today. ${rec.isCod ? "Keep the cash ready." : "Payment is done, nothing to pay on delivery."}</div>`;
+    note = `<div class="zt-note zt-good">It should reach you today. ${cashDue(rec) ? `Keep ${money(cashDue(rec), rec.currency)} ready.` : "Payment is done, nothing to pay on delivery."}</div>`;
   }
 
   let scans: any[] = [];
@@ -285,7 +303,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const meta = [
     ship?.carrier ? { k: "Courier", v: ship.carrier } : null,
     ship?.trackingNo ? { k: "Tracking number", v: ship.trackingNo } : null,
-    rec.isCod ? { k: "Payment", v: `Cash on delivery` } : { k: "Payment", v: "Paid online" },
+    cashDue(rec)
+      ? { k: "Payment", v: `Cash on delivery - ${money(cashDue(rec), rec.currency)}` }
+      : { k: "Payment", v: "Prepaid" },
     rec.city ? { k: "Delivering to", v: rec.city } : null,
   ]
     .filter(Boolean)
