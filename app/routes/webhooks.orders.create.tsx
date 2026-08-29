@@ -2,7 +2,7 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { firstDelivery, ensureShop, upsertOrder } from "../lib/webhook.server";
 import { queueMessage, eventEnabled } from "../lib/notify.server";
-import { blankVars, itemLine, money, etaRange } from "../lib/templates.server";
+import { blankVars, itemLine, money, etaRange, orderTotal } from "../lib/templates.server";
 import { markConverted } from "../lib/abandoned.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -23,7 +23,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   v.name = rec.customerName || "there";
   v.order = rec.orderNumber;
   v.item = itemLine(order);
-  v.amount = money(order.total_price, order.currency);
+  v.amount = money(orderTotal(order), order.currency);
   v.eta = etaRange();
 
   // For COD we ask for confirmation, for prepaid we send "order received".

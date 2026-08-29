@@ -66,7 +66,10 @@ export async function applyToShipment(shipmentId: string, node: any) {
   v.name = rec.customerName || "there";
   v.order = rec.orderNumber;
   v.item = rec.itemLine || "your order";
-  v.amount = money(rec.totalPrice, rec.currency);
+  // On a partial-payment COD order the balance is what the delivery agent
+  // collects, not the order total. Asking for the total would be asking for
+  // money the customer has already paid once.
+  v.amount = money(rec.outstanding ?? rec.totalPrice, rec.currency);
   v.courier = n.carrierName || sh.carrier || "our courier partner";
   v.tracking = sh.trackingNo || "";
   v.city = n.location || rec.city || "your city";
@@ -77,7 +80,10 @@ export async function applyToShipment(shipmentId: string, node: any) {
   v.attempts = inWords(Math.max(n.attempts, 1));
 
   // Only say "keep the cash ready" when the order really is COD.
-  if (!rec.isCod && event === "out_for_delivery") v.amount = "Already paid";
+  if (event === "out_for_delivery") {
+    const due = Number(rec.outstanding ?? rec.totalPrice);
+    if (!rec.isCod || (Number.isFinite(due) && due <= 0)) v.amount = "Already paid";
+  }
 
   await queueMessage({
     shopId: shop.id,

@@ -2,7 +2,7 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { firstDelivery, ensureShop, upsertOrder } from "../lib/webhook.server";
 import { queueMessage, eventEnabled } from "../lib/notify.server";
-import { blankVars, itemLine, money, etaRange } from "../lib/templates.server";
+import { blankVars, itemLine, money, etaRange, orderTotal } from "../lib/templates.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { shop, topic, payload } = await authenticate.webhook(request);
@@ -25,13 +25,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return new Response();
   }
 
+  // Second guard, for the partial-payment case. Shopify fires orders/paid
+  // when the small advance is taken, while the rest is still owed at the
+  // door. Saying "we have received your payment" then is simply untrue.
+  const stillOwed = Number(order?.total_outstanding ?? 0);
+  if (Number.isFinite(stillOwed) && stillOwed > 0) {
+    console.log(
+      `[orders/paid] ${rec.orderNumber} still has ${stillOwed} outstanding, no message sent`,
+    );
+    return new Response();
+  }
+
   if (!eventEnabled(s, "order_paid")) return new Response();
 
   const v = blankVars();
   v.name = rec.customerName || "there";
   v.order = rec.orderNumber;
   v.item = itemLine(order);
-  v.amount = money(order.total_price, order.currency);
+  v.amount = money(orderTotal(order), order.currency);
   v.eta = etaRange();
 
   await queueMessage({

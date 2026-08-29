@@ -1,5 +1,5 @@
 import db from "../db.server";
-import { itemLine, shortAddress } from "./templates.server";
+import { itemLine, shortAddress, orderTotal, amountDue } from "./templates.server";
 
 /**
  * Shopify retries every webhook, and the same event can arrive two or three
@@ -110,9 +110,39 @@ export function pickName(order: any): string {
  */
 export function isCodOrder(order: any): boolean {
   const names: string[] = order?.payment_gateway_names || [];
-  return names.some((g) =>
-    /cash[\s_-]?on[\s_-]?delivery|(^|[^a-z])cod([^a-z]|$)/i.test(String(g)),
-  );
+  if (
+    names.some((g) =>
+      /cash[\s_-]?on[\s_-]?delivery|(^|[^a-z])cod([^a-z]|$)/i.test(String(g)),
+    )
+  ) {
+    return true;
+  }
+
+  // Partial-payment COD apps tag the order themselves - COD King writes
+  // "COD-Verified". That tag is a plain statement that cash is due.
+  if (/(^|[^a-z])cod([^a-z]|$)/i.test(String(order?.tags ?? ""))) return true;
+
+  // And the case that caught us out: those apps create the order with NO
+  // gateway at all and simply leave the balance unpaid, which Shopify shows
+  // as "pending" or "partially paid". No gateway name to match, but money
+  // still has to be collected at the door - and that is what COD means for
+  // every message this app sends.
+  //
+  // A prepaid order waiting on its gateway looks the same for a few seconds.
+  // We accept that: asking such a customer to confirm is harmless, while
+  // treating a real COD order as prepaid sends "payment received" for money
+  // that was never paid.
+  const status = String(order?.financial_status ?? "").toLowerCase();
+  const outstanding = Number(order?.total_outstanding ?? 0);
+  if (
+    Number.isFinite(outstanding) &&
+    outstanding > 0 &&
+    (status === "pending" || status === "partially_paid")
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -139,7 +169,11 @@ export async function upsertOrder(shopId: string, order: any) {
     customerName: name || null,
     phone,
     email: order.email ?? null,
-    totalPrice: order.total_price ?? null,
+    totalPrice: orderTotal(order),
+    // What is still to be collected at the door. On a partial-payment COD
+    // order this is smaller than the total, and it is the only figure the
+    // customer should ever be asked for.
+    outstanding: amountDue(order),
     currency: order.currency ?? null,
     financial: order.financial_status ?? null,
     gateway: (order.payment_gateway_names ?? []).join(", ") || null,

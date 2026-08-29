@@ -140,6 +140,11 @@ model OrderRecord {
   @@unique([shopId, shopifyId])
   @@index([shopId, createdAt])
 
+  /// What is still to be collected on delivery. On a partial-payment COD
+  /// order this is less than the total, and it is the figure the customer
+  /// must be shown - never the total.
+  outstanding String?
+
   /// "Portable Blender + 1 more item" - when a courier update arrives we do
   /// not have Shopify's payload, so we keep it here.
   itemLine String?

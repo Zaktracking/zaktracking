@@ -69,14 +69,34 @@ export function blankVars(): Vars {
 }
 
 /**
+ * Lines that a Cash-on-Delivery app adds to the order but that the customer
+ * never thinks of as a product. COD King writes a zero-priced "Partial
+ * Payment" line, and some apps duplicate the real product at zero. Naming
+ * those in a message reads like a mistake, so they are left out.
+ */
+const HELPER_LINE = /partial\s*payment|cod\s*(fee|charge|advance)|shipping\s*protection|insurance/i;
+
+/**
  * The order's item names on a single line.
  *   one item       -> "Portable Blender"
  *   more than one  -> "Portable Blender + 2 more items"
  * Long names get truncated, otherwise they break badly on WhatsApp.
  */
 export function itemLine(order: any): string {
-  const li: any[] = order?.line_items ?? [];
+  let li: any[] = order?.line_items ?? [];
   if (!li.length) return "your order";
+
+  const real = li.filter((l: any) => {
+    const title = String(l?.title ?? l?.name ?? "");
+    if (HELPER_LINE.test(title)) return false;
+    // A zero-priced line beside a paid one is the COD app's placeholder,
+    // not a free gift the customer chose.
+    const price = Number(l?.price ?? l?.original_price ?? 0);
+    if (li.length > 1 && Number.isFinite(price) && price === 0) return false;
+    return true;
+  });
+
+  if (real.length) li = real;
 
   let first = String(li[0].title ?? li[0].name ?? "your order").trim();
   if (first.length > 46) first = first.slice(0, 45).trimEnd() + "…";
@@ -84,6 +104,35 @@ export function itemLine(order: any): string {
   const rest = li.length - 1;
   if (rest <= 0) return first;
   return `${first} + ${rest} more item${rest > 1 ? "s" : ""}`;
+}
+
+/**
+ * What the order is really worth.
+ *
+ * A partial-payment COD app can leave total_price at zero on the webhook
+ * that creates the order - the money is recorded as still outstanding
+ * instead. "Total: INR 0" in a message looks broken, so we take the first
+ * figure that is actually a number greater than zero.
+ */
+export function orderTotal(order: any): string | null {
+  const candidates = [
+    order?.total_price,
+    order?.current_total_price,
+    order?.total_outstanding,
+    order?.subtotal_price,
+  ];
+  for (const c of candidates) {
+    const n = Number(c);
+    if (Number.isFinite(n) && n > 0) return String(c);
+  }
+  return candidates.find((c) => c != null && String(c).trim() !== "") ?? null;
+}
+
+/** What is still to be collected at the door, if anything. */
+export function amountDue(order: any): string | null {
+  const n = Number(order?.total_outstanding);
+  if (Number.isFinite(n) && n > 0) return String(order.total_outstanding);
+  return null;
 }
 
 /** "INR 899" - so it always looks the same in every message. */
