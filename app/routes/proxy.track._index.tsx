@@ -45,13 +45,13 @@ function fmt(d: any): string {
 const CSS = `
 <style>
 .zt-wrap
-{max-width:780px;margin:0 auto;padding:38px 18px 70px;font-family:inherit;color:#16181d}
+{max-width:780px;margin:0 auto;padding:38px 18px 70px;font-family:inherit;color:inherit}
 .zt-h1
-{font-size:30px;line-height:1.15;font-weight:700;margin:0 0 8px;letter-spacing:-.02em}
+{font-size:30px;line-height:1.15;font-weight:700;margin:0 0 8px;letter-spacing:-.02em;color:inherit}
 .zt-sub
-{color:#65686f;font-size:15px;margin:0 0 26px}
+{color:inherit;opacity:.72;font-size:15px;margin:0 0 26px}
 .zt-card
-{border:1px solid #e6e7ea;border-radius:16px;padding:22px;background:#fff;margin-bottom:18px}
+{border:1px solid #e6e7ea;border-radius:16px;padding:22px;background:#fff;color:#16181d;margin-bottom:18px}
 .zt-form
 {display:flex;gap:10px;flex-wrap:wrap}
 .zt-form .zt-f
@@ -59,11 +59,13 @@ const CSS = `
 .zt-lab
 {display:block;font-size:12px;font-weight:600;color:#65686f;margin-bottom:6px;letter-spacing:.02em;text-transform:uppercase}
 .zt-in
-{width:100%;box-sizing:border-box;padding:12px 14px;border:1px solid #d3d5da;border-radius:10px;font-size:15px;background:#fff;color:#16181d}
+{width:100%;box-sizing:border-box;padding:12px 14px;border:1px solid #d3d5da !important;border-radius:10px;font-size:15px;background:#fff !important;color:#16181d !important}
+.zt-in::placeholder
+{color:#8a8d94 !important;opacity:1}
 .zt-in:focus
 {outline:none;border-color:#16181d;box-shadow:0 0 0 3px rgba(22,24,29,.08)}
 .zt-btn
-{background:#16181d;color:#fff;border:0;border-radius:10px;padding:13px 26px;font-size:15px;font-weight:600;cursor:pointer;align-self:flex-end}
+{background:#16181d !important;color:#fff !important;border:0;border-radius:10px;padding:13px 26px;font-size:15px;font-weight:600;cursor:pointer;align-self:flex-end}
 .zt-btn:hover
 {background:#33363d}
 .zt-hero
@@ -103,7 +105,7 @@ const CSS = `
 .zt-step.on .zt-slab
 {color:#16181d}
 .zt-note
-{border-radius:12px;padding:14px 16px;font-size:14px;margin:18px 0 0;line-height:1.5}
+{border-radius:12px;padding:14px 16px;font-size:14px;margin:18px 0 0;line-height:1.5;color:#16181d}
 .zt-warn
 {background:#fff6e6;border-left:3px solid #b98900}
 .zt-bad
@@ -131,9 +133,9 @@ const CSS = `
 .zt-hist .l
 {font-size:12px;color:#8a8d94;margin-top:2px}
 .zt-help
-{text-align:center;color:#65686f;font-size:14px;margin-top:26px}
+{text-align:center;color:inherit;opacity:.72;font-size:14px;margin-top:26px}
 .zt-help a
-{color:#16181d;font-weight:600}
+{color:inherit;font-weight:600;text-decoration:underline}
 @media (max-width:600px)
 {
 .zt-h1{font-size:24px}
