@@ -6,6 +6,7 @@ import {
 } from "../lib/track.server";
 import { applyToShipment, FINAL } from "../lib/tracksync.server";
 import { sweepAbandoned } from "../lib/abandoned.server";
+import { sweepCancelRequests } from "../lib/inbound.server";
 
 /**
  * The clock job.
@@ -19,6 +20,7 @@ import { sweepAbandoned } from "../lib/abandoned.server";
  *   1. Register new tracking numbers with 17TRACK
  *   2. Ask for the status of parcels still in transit (in case a push is missed)
  *   3. Abandoned cart reminders
+ *   4. Cancellations the customer asked for, once the grace period is over
  *
  * The push (webhook) arrives instantly, this is its backup. We need both -
  * push is fast but drops occasionally, polling is slow but reliable.
@@ -34,6 +36,8 @@ async function run() {
     changed: 0,
     abandoned1: 0,
     abandoned2: 0,
+    cancelled: 0,
+    cancelTooLate: 0,
     notes: [] as string[],
   };
 
@@ -143,6 +147,15 @@ async function run() {
   const ab = await sweepAbandoned();
   out.abandoned1 = ab.sent1;
   out.abandoned2 = ab.sent2;
+
+  /* ---------- 4. cancellations the customer asked for ----------
+     Pressing Cancel on WhatsApp does not cancel anything at once. A
+     cancelled Shopify order cannot be brought back, and a button is easy
+     to press by accident. So the request waits out a grace period here,
+     and a Confirm arriving in the meantime wipes it. */
+  const cx = await sweepCancelRequests();
+  out.cancelled = cx.cancelled;
+  out.cancelTooLate = cx.tooLate;
 
   console.log("[cron]", JSON.stringify(out));
   return out;

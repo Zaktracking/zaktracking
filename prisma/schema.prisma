@@ -88,6 +88,14 @@ model Shop {
   templates Template[]
   messages  MessageLog[]
   carts     AbandonedCart[]
+  inbound   InboundMessage[]
+
+  /// When the customer presses Cancel we do not cancel straight away - a
+  /// cancelled Shopify order can never be brought back. We wait, and if
+  /// they press Confirm in the meantime nothing happens at all.
+  autoCancel     Boolean @default(true)
+  /// Minutes to wait before a cancellation request is acted on.
+  cancelGraceMin Int     @default(30)
 
   /// Discount code for the second abandoned-cart reminder.
   /// If it is empty the second reminder is not sent at all - better than a fake code.
@@ -117,12 +125,17 @@ model OrderRecord {
   /// null = not asked yet, true = confirmed, false = declined
   codConfirmed Boolean?
   cancelledAt  DateTime?
+  /// Set when the customer presses Cancel on WhatsApp. Cleared the moment
+  /// they press Confirm instead. The cron acts on it once the grace period
+  /// set on the shop has passed.
+  cancelRequestedAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   shipments Shipment[]
   messages  MessageLog[]
+  inbound   InboundMessage[]
 
   @@unique([shopId, shopifyId])
   @@index([shopId, createdAt])
@@ -282,4 +295,33 @@ model OptOut {
 
   @@unique([shopId, phone])
   @@index([shopId])
+}
+
+
+/// Every reply a customer sends. This is the merchant's inbox: a number on
+/// the WhatsApp Cloud API cannot be opened in the ordinary WhatsApp
+/// Business app, so what is stored here is the only record there is.
+///
+/// waMessageId is unique because Meta retries a webhook it thinks failed.
+/// Without it one "Cancel" could be acted on three times.
+model InboundMessage {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  orderId String?
+  order   OrderRecord? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  /// Meta's own message id
+  waMessageId String @unique
+  from        String
+  text        String
+  /// text | button | interactive | image | ...
+  kind        String
+  /// confirm | cancel | stop | start | none
+  intent      String @default("none")
+
+  createdAt DateTime @default(now())
+
+  @@index([shopId, createdAt])
 }

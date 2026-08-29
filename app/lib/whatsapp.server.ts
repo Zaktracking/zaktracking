@@ -33,21 +33,76 @@ export async function sendTemplate(opts: {
   /** lets us look up the template's real language before sending */
   wabaId?: string | null;
 }): Promise<SendResult> {
+  // ---------------------------------------------------------------
+  //  Match what the template actually asks for.
+  //
+  //  A template is stored on Meta's side, and the merchant can edit it
+  //  there at any time. Send five values to a body that now has three
+  //  {{n}} and the whole message is refused with 132000 - silently, from
+  //  the customer's point of view.
+  //
+  //  So we read the template first and shape the call to fit it. Our
+  //  values are always in the order the body is written in, so dropping
+  //  the extra ones from the end leaves a message that still reads
+  //  correctly. Too few is the opposite case: there is nothing sensible
+  //  to invent, so we refuse rather than send "{{4}}" to a customer.
+  // ---------------------------------------------------------------
+  let params = [...opts.params];
+  let buttonParam = opts.buttonParam ?? null;
+  let specLanguage: string | null = null;
+
+  if (opts.wabaId && !opts.language) {
+    const spec = await templateSpec(opts.wabaId, opts.token, opts.template);
+
+    if (spec) {
+      specLanguage = spec.language;
+
+      if (spec.bodyVars < params.length) {
+        console.log(
+          `[whatsapp] ${opts.template} has ${spec.bodyVars} body variables, we hold ` +
+            `${params.length} - sending the first ${spec.bodyVars}`,
+        );
+        params = params.slice(0, spec.bodyVars);
+      } else if (spec.bodyVars > params.length) {
+        return {
+          ok: false,
+          error:
+            `[params] ${opts.template} needs ${spec.bodyVars} body variables but only ` +
+            `${params.length} are available - not sent`,
+          permanent: true,
+        };
+      }
+
+      // A button variable is the same trap in miniature: a static URL
+      // button rejects a parameter, and a dynamic one requires it.
+      if (!spec.urlVar && buttonParam) {
+        console.log(`[whatsapp] ${opts.template} has a static button - dropping its parameter`);
+        buttonParam = null;
+      } else if (spec.urlVar && !buttonParam) {
+        return {
+          ok: false,
+          error: `[params] ${opts.template} has a dynamic button but no value for it - not sent`,
+          permanent: true,
+        };
+      }
+    }
+  }
+
   const components: any[] = [];
 
-  if (opts.params.length) {
+  if (params.length) {
     components.push({
       type: "body",
-      parameters: opts.params.map((t) => ({ type: "text", text: t || "-" })),
+      parameters: params.map((t) => ({ type: "text", text: t || "-" })),
     });
   }
 
-  if (opts.buttonParam) {
+  if (buttonParam) {
     components.push({
       type: "button",
       sub_type: "url",
       index: "0",
-      parameters: [{ type: "text", text: opts.buttonParam }],
+      parameters: [{ type: "text", text: buttonParam }],
     });
   }
 
@@ -69,10 +124,9 @@ export async function sendTemplate(opts: {
   if (opts.language) {
     tries.push(opts.language);
   } else {
-    if (opts.wabaId) {
-      const found = await resolveLanguage(opts.wabaId, opts.token, opts.template);
-      if (found) tries.push(found);
-    }
+    // The template lookup above already told us the language, so this
+    // costs nothing extra.
+    if (specLanguage) tries.push(specLanguage);
     for (const fallback of ["en_US", "en"]) {
       if (!tries.includes(fallback)) tries.push(fallback);
     }

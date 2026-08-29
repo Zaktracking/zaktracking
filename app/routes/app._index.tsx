@@ -6,7 +6,7 @@ import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { ensureShop, toE164 } from "../lib/webhook.server";
 import { checkCredentials, listTemplates, sendTemplate, templateSpec } from "../lib/whatsapp.server";
-import { EVENTS } from "../lib/templates.server";
+import { EVENTS, blankVars } from "../lib/templates.server";
 
 /**
  * Admin page.
@@ -38,6 +38,21 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     db.shipment.count({ where: { order: { shopId: shop.id }, registered: true } }),
   ]);
 
+  // The merchant's inbox. A Cloud API number cannot be opened in the normal
+  // WhatsApp Business app, so this table is the only place replies exist.
+  const replies = await db.inboundMessage.findMany({
+    where: { shopId: shop.id },
+    orderBy: { createdAt: "desc" },
+    take: 20,
+    include: { order: { select: { orderNumber: true } } },
+  });
+
+  const awaitingCancel = await db.orderRecord.findMany({
+    where: { shopId: shop.id, cancelRequestedAt: { not: null }, cancelledAt: null },
+    orderBy: { cancelRequestedAt: "asc" },
+    take: 20,
+  });
+
   let live: any = null;
   let templates: any[] = [];
   if (shop.waToken && shop.waPhoneNumberId) {
@@ -61,12 +76,40 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const missing = Array.from(new Set(Object.values(EVENTS).map((e) => e.template)))
     .filter((n) => !approved.has(n));
 
+  // How many {{n}} the template really has, next to how many the app holds
+  // for it. When those two numbers disagree the message is refused with
+  // 132000 and the customer gets nothing - so it is worth seeing here
+  // rather than finding out from a failed send.
+  const blank = blankVars();
+  const ours = new Map<string, number>();
+  for (const def of Object.values(EVENTS)) {
+    ours.set(def.template, def.params(blank).length);
+  }
+
+  function bodyVarsOf(t: any): number {
+    let n = 0;
+    for (const comp of t?.components ?? []) {
+      if (String(comp?.type ?? "").toUpperCase() !== "BODY") continue;
+      for (const m of String(comp?.text ?? "").matchAll(/\{\{\s*(\d+)\s*\}\}/g)) {
+        n = Math.max(n, Number(m[1]));
+      }
+    }
+    return n;
+  }
+
   const templateList = templates
-    .map((t: any) => ({ name: t.name, status: t.status, language: t.language }))
+    .map((t: any) => ({
+      name: t.name,
+      status: t.status,
+      language: t.language,
+      needs: bodyVarsOf(t),
+      sends: ours.has(t.name) ? ours.get(t.name)! : null,
+    }))
     .sort((a: any, b: any) => String(a.name).localeCompare(String(b.name)));
 
   return {
     shop, messages, orders, queued, live, missing, templateList, parcels, tracked,
+    replies, awaitingCancel,
     domain: session.shop,
     appUrl: process.env.SHOPIFY_APP_URL ?? "",
     cronSet: Boolean(process.env.CRON_SECRET),
@@ -108,6 +151,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         onDelivered: on("onDelivered"),
         onCancelled: on("onCancelled"),
         onAbandoned: on("onAbandoned"),
+        autoCancel: on("autoCancel"),
+        cancelGraceMin: Math.min(
+          720,
+          Math.max(5, Number(fd.get("cancelGraceMin")) || 30),
+        ),
       },
     });
     const after = await db.shop.findUnique({ where: { id: shop.id } });
@@ -272,7 +320,8 @@ function Check({ label, name, defaultChecked, help }: any) {
 
 export default function Index() {
   const { shop, messages, orders, queued, live, missing, templateList, parcels,
-    tracked, domain, appUrl, cronSet } = useLoaderData<typeof loader>();
+    tracked, domain, appUrl, cronSet, replies, awaitingCancel } =
+    useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
   // The settings form is a plain <Form>, so its result comes back through
   // useActionData, not through the fetcher. Without this the Save button
@@ -377,6 +426,18 @@ export default function Index() {
           <Check label="Abandoned cart" name="onAbandoned" defaultChecked={shop.onAbandoned}
             help="Marketing category — ₹0.92 per message, seven times Utility" />
 
+          <hr style={{ border: 0, borderTop: "1px solid #e3e3e3", margin: "18px 0" }} />
+          <h2 style={S.h2}>When a customer cancels on WhatsApp</h2>
+
+          <Check label="Cancel the order automatically" name="autoCancel"
+            defaultChecked={shop.autoCancel}
+            help="Nothing is cancelled the moment the button is pressed. The request waits for the time below, and if the customer presses Confirm in the meantime it is dropped and the order stands — a cancelled Shopify order can never be brought back." />
+
+          <Text label="Wait before cancelling (minutes)" name="cancelGraceMin"
+            type="number"
+            defaultValue={String(shop.cancelGraceMin)}
+            help="Between 5 and 720. Prepaid orders and anything already handed to the courier are never cancelled here — those are tagged for you to decide." />
+
           <button type="submit" style={S.btn}>Save</button>
 
           <p style={{ ...S.help, marginTop: 12 }}>
@@ -435,6 +496,7 @@ export default function Index() {
                 <tr>
                   <th style={S.th}>Name</th>
                   <th style={S.th}>Language</th>
+                  <th style={S.th}>Variables</th>
                   <th style={S.th}>Status</th>
                 </tr>
               </thead>
@@ -443,6 +505,21 @@ export default function Index() {
                   <tr key={`${t.name}-${t.language}`}>
                     <td style={S.td}><code style={S.code}>{t.name}</code></td>
                     <td style={S.td}>{t.language}</td>
+                    <td style={S.td}>
+                      {t.sends === null ? (
+                        <span style={{ color: "#616161" }}>not used</span>
+                      ) : t.sends === t.needs ? (
+                        <span style={{ color: "#0b5c2e" }}>{t.needs} — matches</span>
+                      ) : t.sends > t.needs ? (
+                        <span style={{ color: "#7a5a00" }}>
+                          needs {t.needs}, app holds {t.sends} — extra ones are dropped
+                        </span>
+                      ) : (
+                        <span style={{ color: "#8e1c22" }}>
+                          needs {t.needs}, app holds only {t.sends} — will not send
+                        </span>
+                      )}
+                    </td>
                     <td style={S.td}>
                       <span style={{ color: t.status === "APPROVED" ? "#0b5c2e" : "#7a5a00" }}>
                         {t.status}
@@ -507,6 +584,96 @@ export default function Index() {
                           {p.lastEventDesc}
                         </div>
                       )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {awaitingCancel.length > 0 && (
+        <div style={{ ...S.card, borderColor: "#e0b4b4" }}>
+          <h2 style={{ ...S.h2, color: "#8e1c22" }}>Waiting to be cancelled</h2>
+          <p style={{ ...S.help, marginBottom: 14 }}>
+            These customers pressed Cancel. Nothing has been cancelled yet — if
+            they press Confirm before the wait is over, the order simply stands.
+          </p>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th style={S.th}>Order</th>
+                  <th style={S.th}>Asked at</th>
+                  <th style={S.th}>Payment</th>
+                </tr>
+              </thead>
+              <tbody>
+                {awaitingCancel.map((o: any) => (
+                  <tr key={o.id}>
+                    <td style={S.td}>
+                      <a href={`https://${domain}/admin/orders/${o.shopifyId}`}
+                        target="_blank" rel="noreferrer">{o.orderNumber}</a>
+                    </td>
+                    <td style={S.td}>
+                      {new Date(o.cancelRequestedAt).toLocaleString("en-IN", {
+                        day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+                      })}
+                    </td>
+                    <td style={S.td}>
+                      {o.isCod ? "COD" : "Prepaid — tagged only, not cancelled"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <div style={S.card}>
+        <h2 style={S.h2}>Customer replies</h2>
+        <p style={{ ...S.help, marginBottom: 14 }}>
+          Everything customers send back. Replies only arrive once the Callback
+          URL is set in Meta:{" "}
+          <code style={S.code}>{appUrl}/webhooks/whatsapp</code>, with the
+          <code style={S.code}>messages</code> field subscribed.
+        </p>
+        {replies.length === 0 ? (
+          <p style={S.help}>No reply has come in yet.</p>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th style={S.th}>When</th>
+                  <th style={S.th}>From</th>
+                  <th style={S.th}>Message</th>
+                  <th style={S.th}>Order</th>
+                  <th style={S.th}>Read as</th>
+                </tr>
+              </thead>
+              <tbody>
+                {replies.map((r: any) => (
+                  <tr key={r.id}>
+                    <td style={S.td}>
+                      {new Date(r.createdAt).toLocaleString("en-IN", {
+                        day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+                      })}
+                    </td>
+                    <td style={S.td}>{r.from}</td>
+                    <td style={S.td}>{r.text}</td>
+                    <td style={S.td}>{r.order?.orderNumber ?? "-"}</td>
+                    <td style={S.td}>
+                      <span style={{
+                        color: r.intent === "confirm" ? "#0b5c2e"
+                          : r.intent === "cancel" ? "#8e1c22"
+                          : r.intent === "stop" ? "#7a5a00"
+                          : "#616161",
+                      }}>
+                        {r.intent}
+                      </span>
                     </td>
                   </tr>
                 ))}
