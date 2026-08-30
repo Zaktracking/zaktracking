@@ -27,6 +27,15 @@ const SEND_WINDOW_MINUTES = 15;
 /** Default template name; the merchant can change it on the admin page. */
 const DEFAULT_TEMPLATE = "zakdor_otp";
 
+/** Meta accepts lowercase letters, digits and underscores, nothing else. */
+function safeName(raw: string | null | undefined): string {
+  return String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
 function hash(shopId: string, phone: string, code: string): string {
   // The shop id and phone are mixed in so the same six digits hash
   // differently for a different number - one leaked hash tells you nothing.
@@ -35,7 +44,7 @@ function hash(shopId: string, phone: string, code: string): string {
 
 export type OtpResult =
   | { ok: true }
-  | { ok: false; reason: string; retryAfterSec?: number };
+  | { ok: false; reason: string; retryAfterSec?: number; detail?: string };
 
 /* ------------------------------------------------------------------ */
 /*  Sending                                                            */
@@ -166,7 +175,7 @@ export async function requestOtp(shopId: string, phone: string): Promise<OtpResu
       phoneNumberId: shop!.waPhoneNumberId!,
       token: shop!.waToken!,
       to: phone,
-      template: shop!.otpTemplate || DEFAULT_TEMPLATE,
+      template: safeName(shop!.otpTemplate) || DEFAULT_TEMPLATE,
       code,
     });
     if (r.ok) { usedChannel = "whatsapp"; return true; }
@@ -205,6 +214,9 @@ export async function requestOtp(shopId: string, phone: string): Promise<OtpResu
     return {
       ok: false,
       reason: "Could not send the code right now. Please try again in a minute.",
+      // The provider's own words. Without this a merchant is left guessing
+      // at a failure only the provider can explain.
+      detail: lastError || "no channel accepted the message",
     };
   }
 
