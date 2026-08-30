@@ -138,6 +138,27 @@ export async function requestOtp(shopId: string, phone: string): Promise<OtpResu
 
   let delivered = false;
   let lastError = "";
+  let usedChannel = "";
+
+  /** So a failure is visible on the app's own page, not only in the logs. */
+  async function note(ch: string, status: string, error: string | null) {
+    try {
+      await db.messageLog.create({
+        data: {
+          shopId,
+          channel: ch,
+          event: "otp",
+          to: phone,
+          body: "One-time code",
+          status,
+          error,
+          sentAt: status === "sent" ? new Date() : null,
+        },
+      });
+    } catch (e: any) {
+      console.log(`[otp] could not write the log line: ${e?.message ?? e}`);
+    }
+  }
 
   async function tryWhatsApp() {
     if (!canWa) return false;
@@ -148,9 +169,10 @@ export async function requestOtp(shopId: string, phone: string): Promise<OtpResu
       template: shop!.otpTemplate || DEFAULT_TEMPLATE,
       code,
     });
-    if (r.ok) return true;
+    if (r.ok) { usedChannel = "whatsapp"; return true; }
     lastError = r.error ?? "WhatsApp send failed";
     console.log(`[otp] whatsapp failed for ${phone}: ${lastError}`);
+    await note("whatsapp", "failed", lastError);
     return false;
   }
 
@@ -163,28 +185,30 @@ export async function requestOtp(shopId: string, phone: string): Promise<OtpResu
       route: shop!.smsRoute,
       senderId: shop!.smsSenderId,
     });
-    if (r.ok) return true;
+    if (r.ok) { usedChannel = "sms"; return true; }
     lastError = r.error;
     console.log(`[otp] sms failed for ${phone}: ${lastError}`);
+    await note("sms", "failed", lastError);
     return false;
   }
 
+  // A code that never arrives is a lost order. So whichever way is put
+  // first, the other one is always tried after it - the setting decides the
+  // order, not whether the second one exists.
   if (channel === "sms") {
     delivered = (await trySms()) || (await tryWhatsApp());
-  } else if (channel === "both") {
-    delivered = (await tryWhatsApp()) || (await trySms());
   } else {
-    delivered = await tryWhatsApp();
+    delivered = (await tryWhatsApp()) || (await trySms());
   }
 
   if (!delivered) {
     return {
       ok: false,
-      reason: lastError
-        ? "Could not send the code. Please check the number."
-        : "No way to send the code is set up yet.",
+      reason: "Could not send the code right now. Please try again in a minute.",
     };
   }
+
+  await note(usedChannel || channel, "sent", null);
 
   // Any earlier code for this number is now void - otherwise two codes
   // would be live at once and the older one could still be used.
@@ -202,7 +226,7 @@ export async function requestOtp(shopId: string, phone: string): Promise<OtpResu
     },
   });
 
-  console.log(`[otp] code sent to ${phone} (${channel})`);
+  console.log(`[otp] code sent to ${phone} (${usedChannel || channel})`);
   return { ok: true };
 }
 
