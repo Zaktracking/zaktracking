@@ -10,8 +10,13 @@ import { unauthenticated } from "../shopify.server";
 
 export type BuyerLine = { variantId: string; quantity: number };
 
+/** A discount already sitting on the shopper's cart, checked against the
+ *  real code before it ever reaches an order. */
+export type BuyerDiscount = { code: string; amount: number };
+
 export type BuyerInput = {
   items: BuyerLine[];     // one or more gid://shopify/ProductVariant/123
+  discount?: BuyerDiscount | null;
   firstName: string;
   lastName: string;
   phone: string;          // E.164, already verified by OTP
@@ -72,6 +77,71 @@ export async function variantInfo(domain: string, variantId: string) {
 }
 
 /**
+ * What a discount code is really worth.
+ *
+ * The shopper's browser tells us which code the cart is carrying. It is not
+ * trusted for a rupee: the code is looked up here, and only a live code with
+ * a value Shopify itself recognises is ever put on an order. The browser's
+ * own figure is used only as a ceiling, never as the number.
+ */
+export async function discountValue(
+  domain: string,
+  code: string,
+  subtotal: number,
+  claimed: number,
+): Promise<{ code: string; amount: number } | null> {
+  const clean = String(code || "").trim();
+  if (!clean || subtotal <= 0) return null;
+
+  try {
+    const json = await call(
+      domain,
+      `#graphql
+       query zakDiscount($code: String!) {
+         codeDiscountNodeByCode(code: $code) {
+           codeDiscount {
+             __typename
+             ... on DiscountCodeBasic {
+               status
+               customerGets {
+                 value {
+                   __typename
+                   ... on DiscountPercentage { percentage }
+                   ... on DiscountAmount { amount { amount } }
+                 }
+               }
+             }
+           }
+         }
+       }`,
+      { code: clean },
+    );
+
+    const d = json?.data?.codeDiscountNodeByCode?.codeDiscount;
+    if (!d || d.status !== "ACTIVE") return null;
+
+    const v = d.customerGets?.value;
+    let amount = 0;
+    if (v?.__typename === "DiscountPercentage") {
+      amount = (subtotal * (Number(v.percentage) || 0)) / 100;
+    } else if (v?.__typename === "DiscountAmount") {
+      amount = Number(v.amount?.amount) || 0;
+    }
+
+    // Never more than the cart itself claimed, never more than the goods.
+    if (claimed > 0) amount = Math.min(amount, claimed);
+    amount = Math.min(amount, subtotal);
+    amount = Math.round(amount * 100) / 100;
+
+    if (amount <= 0) return null;
+    return { code: clean, amount };
+  } catch (e: any) {
+    console.log(`[buy] could not read the discount code: ${e?.message ?? e}`);
+    return null;
+  }
+}
+
+/**
  * Writes the order. Financial status stays PENDING because no money has
  * moved - that is exactly what Cash on Delivery means, and it is what makes
  * the rest of the app treat it as COD.
@@ -101,6 +171,15 @@ export async function createCodOrder(domain: string, b: BuyerInput) {
     },
   };
   order.billingAddress = { ...order.shippingAddress };
+
+  if (b.discount && b.discount.amount > 0) {
+    order.discountCode = {
+      itemFixedDiscountCode: {
+        code: b.discount.code,
+        amountSet: { shopMoney: { amount: b.discount.amount.toFixed(2), currencyCode: "INR" } },
+      },
+    };
+  }
 
   try {
     const json = await call(

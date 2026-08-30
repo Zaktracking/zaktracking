@@ -17,7 +17,7 @@ import { authenticate } from "../shopify.server";
 import { shopFromProxy, esc, liquid } from "../lib/proxy.server";
 import { toE164 } from "../lib/webhook.server";
 import { isVerified } from "../lib/otp.server";
-import { variantInfo, createCodOrder } from "../lib/order-create.server";
+import { variantInfo, createCodOrder, discountValue } from "../lib/order-create.server";
 
 const DEFAULT_PREPAID_OFF = "35";
 const DEFAULT_PREPAID_CODE = "PREPAID35";
@@ -438,8 +438,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return Response.json({ ok: false, reason: "Please confirm your mobile number first" });
   }
 
+  // Whatever the cart was carrying, checked against the real code.
+  let discount = null;
+  if (d.discountCode) {
+    discount = await discountValue(
+      domain,
+      String(d.discountCode),
+      Number(d.subtotal) || 0,
+      Number(d.discountAmount) || 0,
+    );
+    if (discount) console.log(`[buy] ${discount.code} worth ${discount.amount}`);
+  }
+
   const res = await createCodOrder(domain, {
     items,
+    discount,
     firstName: String(d.firstName).trim().slice(0, 60),
     lastName: String(d.lastName ?? "").trim().slice(0, 60),
     phone,
