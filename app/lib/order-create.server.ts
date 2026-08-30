@@ -8,9 +8,10 @@
 
 import { unauthenticated } from "../shopify.server";
 
+export type BuyerLine = { variantId: string; quantity: number };
+
 export type BuyerInput = {
-  variantId: string;      // gid://shopify/ProductVariant/123
-  quantity: number;
+  items: BuyerLine[];     // one or more gid://shopify/ProductVariant/123
   firstName: string;
   lastName: string;
   phone: string;          // E.164, already verified by OTP
@@ -82,8 +83,11 @@ export async function createCodOrder(domain: string, b: BuyerInput) {
     financialStatus: "PENDING",
     tags: "Cash on Delivery, zaktracking-form, otp-verified",
     note: b.note || null,
-    customAttributes: [{ key: "Phone verified", value: "Yes, by WhatsApp OTP" }],
-    lineItems: [{ variantId: b.variantId, quantity: Math.max(1, b.quantity) }],
+    customAttributes: [{ key: "Phone verified", value: "Yes, by a one-time code" }],
+    lineItems: b.items.map((l) => ({
+      variantId: l.variantId,
+      quantity: Math.max(1, Math.min(10, Number(l.quantity) || 1)),
+    })),
     shippingAddress: {
       firstName: b.firstName,
       lastName: b.lastName || "-",

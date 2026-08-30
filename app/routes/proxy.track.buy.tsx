@@ -121,13 +121,58 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.public.appProxy(request);
 
   const url = new URL(request.url);
+  const wantsJson = url.searchParams.get("json") === "1";
   const domain = shopFromProxy(url);
-  if (!domain) return liquid(notice("Something went wrong. Please open the page again."));
+  if (!domain) {
+    return wantsJson
+      ? Response.json({ ok: false, enabled: false })
+      : liquid(notice("Something went wrong. Please open the page again."));
+  }
 
   const shop = await db.shop.findUnique({ where: { domain } });
-  if (!shop) return liquid(notice("This store is not set up yet."));
+  if (!shop) {
+    return wantsJson
+      ? Response.json({ ok: false, enabled: false })
+      : liquid(notice("This store is not set up yet."));
+  }
   if (!shop.formEnabled) {
-    return liquid(notice("Ordering through this page is switched off right now."));
+    return wantsJson
+      ? Response.json({ ok: true, enabled: false })
+      : liquid(notice("Ordering through this page is switched off right now."));
+  }
+
+  /* The popup in the theme asks for this. It carries no secret - only the
+     discount that is already printed on the page, and the product it is
+     about to show. */
+  if (wantsJson) {
+    const offJson = Number(shop.prepaidOff ?? DEFAULT_PREPAID_OFF) || 0;
+    const body: any = {
+      ok: true,
+      enabled: true,
+      off: offJson,
+      code: shop.prepaidCode || DEFAULT_PREPAID_CODE,
+    };
+
+    const askedFor = url.searchParams.get("v");
+    if (askedFor) {
+      const g = toVariantGid(askedFor);
+      const v = g ? await variantInfo(domain, g) : null;
+      if (!v) return Response.json({ ...body, item: null, reason: "That product could not be found." });
+      if (!v.available) {
+        return Response.json({ ...body, item: null, reason: "That product is out of stock right now." });
+      }
+      body.item = {
+        variant: g!.split("/").pop(),
+        title:
+          v.variantTitle && v.variantTitle !== "Default Title"
+            ? `${v.productTitle} - ${v.variantTitle}`
+            : v.productTitle,
+        price: Number(v.price) || 0,
+        image: v.image,
+      };
+    }
+
+    return Response.json(body);
   }
 
   const gid = toVariantGid(url.searchParams.get("v") ?? "");
@@ -365,11 +410,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const d = (await request.json().catch(() => ({}))) as any;
 
-  const gid = toVariantGid(String(d.variant ?? ""));
+  /* One product from a product page, or the whole cart. Both arrive here. */
+  const raw: any[] = Array.isArray(d.items)
+    ? d.items
+    : [{ variant: d.variant, quantity: d.quantity }];
+
+  const items: { variantId: string; quantity: number }[] = [];
+  for (const line of raw.slice(0, 20)) {
+    const g = toVariantGid(String(line?.variant ?? ""));
+    if (!g) continue;
+    items.push({ variantId: g, quantity: Math.min(10, Math.max(1, Number(line?.quantity) || 1)) });
+  }
+
   const phone = toE164(String(d.phone ?? ""));
   const zip = String(d.zip ?? "").replace(/\D/g, "");
 
-  if (!gid) return Response.json({ ok: false, reason: "No product chosen" });
+  if (!items.length) return Response.json({ ok: false, reason: "No product chosen" });
   if (!phone) return Response.json({ ok: false, reason: "Enter a valid mobile number" });
   if (zip.length !== 6) return Response.json({ ok: false, reason: "PIN code must be 6 digits" });
   if (!String(d.firstName ?? "").trim() || !String(d.address1 ?? "").trim() || !String(d.city ?? "").trim()) {
@@ -383,8 +439,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   const res = await createCodOrder(domain, {
-    variantId: gid,
-    quantity: Math.min(10, Math.max(1, Number(d.quantity) || 1)),
+    items,
     firstName: String(d.firstName).trim().slice(0, 60),
     lastName: String(d.lastName ?? "").trim().slice(0, 60),
     phone,
@@ -392,7 +447,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     address1: String(d.address1).trim().slice(0, 200),
     city: String(d.city).trim().slice(0, 60),
     zip,
-    note: "Placed on the store's own order form, phone verified by WhatsApp OTP",
+    note: "Placed on the store's own order form, phone verified by a one-time code",
   });
 
   if (!res.ok) return Response.json({ ok: false, reason: res.error });
