@@ -2,8 +2,7 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { firstDelivery, ensureShop, upsertOrder } from "../lib/webhook.server";
-import { queueMessage, eventEnabled } from "../lib/notify.server";
-import { blankVars, itemLine, money, orderTotal } from "../lib/templates.server";
+import { queueMessage, renderMessage, eventEnabled } from "../lib/notify.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { shop, topic, payload } = await authenticate.webhook(request);
@@ -21,19 +20,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (!eventEnabled(s, "cancelled")) return new Response();
 
-  const v = blankVars();
-  v.name = rec.customerName || "there";
-  v.order = rec.orderNumber;
-  v.item = itemLine(order);
-  v.amount = money(orderTotal(order), order.currency);
-
-  await queueMessage({
-    shopId: s.id,
-    orderId: rec.id,
-    event: "cancelled",
-    to: rec.phone,
-    vars: v,
+  const body = await renderMessage(s.id, "cancelled", "whatsapp", {
+    name: rec.customerName || "there",
+    order: rec.orderNumber,
+    amount: "",
+    link: "",
   });
+
+  if (body) {
+    await queueMessage({
+      shopId: s.id,
+      orderId: rec.id,
+      channel: "whatsapp",
+      event: "cancelled",
+      to: rec.phone,
+      body,
+    });
+  }
 
   return new Response();
 };
