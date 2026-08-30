@@ -141,6 +141,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         waToken: str("waToken") ?? shop.waToken,
         trackApiKey: str("trackApiKey") ?? shop.trackApiKey,
         abandonCode: str("abandonCode"),
+        otpTemplate: str("otpTemplate"),
+        otpChannel: str("otpChannel"),
+        smsEnabled: on("smsEnabled"),
+        smsApiKey: str("smsApiKey") ?? shop.smsApiKey,
+        smsSenderId: str("smsSenderId"),
+        smsRoute: str("smsRoute"),
+        formEnabled: on("formEnabled"),
+        prepaidOff: str("prepaidOff"),
+        prepaidCode: str("prepaidCode"),
         waEnabled: on("waEnabled"),
         onOrderCreate: on("onOrderCreate"),
         codConfirm: on("codConfirm"),
@@ -405,6 +414,45 @@ export default function Index() {
             placeholder="e.g. WELCOME10"
             help="The second reminder (24 hours) goes out with this code. If it is empty the second reminder is not sent at all — better than sending a fake code." />
 
+          <div style={S.field}>
+            <label style={S.label} htmlFor="otpChannel">How the one-time code is sent</label>
+            <select style={S.input} id="otpChannel" name="otpChannel" defaultValue={shop.otpChannel ?? "whatsapp"}>
+              <option value="whatsapp">WhatsApp only — about ₹0.14 a code</option>
+              <option value="both">WhatsApp first, SMS if that fails — recommended</option>
+              <option value="sms">SMS only</option>
+            </select>
+            <p style={S.help}>
+              WhatsApp is far cheaper but reaches only numbers that have it. "WhatsApp first"
+              keeps the cost low and still leaves nobody without a code.
+            </p>
+          </div>
+
+          <Check label="Turn on SMS" name="smsEnabled" defaultChecked={shop.smsEnabled}
+            help="Needs a Fast2SMS API key below. Their OTP route needs no DLT registration." />
+
+          <Text label="Fast2SMS API key" name="smsApiKey" type="password"
+            defaultValue=""
+            placeholder={shop.smsApiKey ? "•••••••• (leave empty to keep it)" : "paste the key"}
+            help="Fast2SMS dashboard → Dev API. Leave this empty on later saves and the stored key is kept." />
+
+          <div style={S.field}>
+            <label style={S.label} htmlFor="smsRoute">SMS route</label>
+            <select style={S.input} id="smsRoute" name="smsRoute" defaultValue={shop.smsRoute ?? "otp"}>
+              <option value="otp">OTP route — cheap, does not reach DND numbers</option>
+              <option value="q">Quick SMS — reaches DND too, around ₹5 a message</option>
+            </select>
+          </div>
+
+          <Text label="SMS sender ID" name="smsSenderId"
+            defaultValue={shop.smsSenderId ?? ""}
+            placeholder="only used on the Quick SMS route"
+            help="The OTP route uses Fast2SMS's own sender ID, so this can stay empty there." />
+
+          <Text label="OTP template name" name="otpTemplate"
+            defaultValue={shop.otpTemplate ?? ""}
+            placeholder="zakdor_otp"
+            help="The Meta template in the Authentication category that carries the one-time code. Leave it empty and the app looks for zakdor_otp." />
+
           <Check label="Turn on message sending" name="waEnabled" defaultChecked={shop.waEnabled}
             help="If this is off, everything stays in the queue and nothing is sent" />
 
@@ -425,6 +473,22 @@ export default function Index() {
           <Check label="Cancelled" name="onCancelled" defaultChecked={shop.onCancelled} />
           <Check label="Abandoned cart" name="onAbandoned" defaultChecked={shop.onAbandoned}
             help="Marketing category — ₹0.92 per message, seven times Utility" />
+
+          <hr style={{ border: 0, borderTop: "1px solid #e3e3e3", margin: "18px 0" }} />
+          <h2 style={S.h2}>Your own order form</h2>
+
+          <Check label="Turn the order form on" name="formEnabled" defaultChecked={shop.formEnabled}
+            help="The page at /apps/track/buy. It writes real orders, so leave it off until you have placed a test order yourself." />
+
+          <Text label="Discount for paying online (₹)" name="prepaidOff"
+            defaultValue={shop.prepaidOff ?? ""}
+            placeholder="35"
+            help="Shown on the form as the saving, and taken off at Shopify's checkout by the code below." />
+
+          <Text label="Discount code for that saving" name="prepaidCode"
+            defaultValue={shop.prepaidCode ?? ""}
+            placeholder="PREPAID35"
+            help="Must exist in Shopify with exactly this amount off. If the two do not match, the form promises one figure and the checkout charges another." />
 
           <hr style={{ border: 0, borderTop: "1px solid #e3e3e3", margin: "18px 0" }} />
           <h2 style={S.h2}>When a customer cancels on WhatsApp</h2>

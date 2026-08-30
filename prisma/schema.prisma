@@ -63,10 +63,16 @@ model Shop {
   waWabaId        String?
   waToken         String?
 
-  // --- SMS (phase 2 - after DLT registration in India) ---
+  // --- SMS (Fast2SMS - the OTP route needs no DLT registration) ---
   smsEnabled  Boolean @default(false)
   smsApiKey   String?
   smsSenderId String?
+  /// "otp" = the cheap service route, does not reach DND numbers.
+  /// "q"   = Quick SMS, reaches DND too, around five rupees a message.
+  smsRoute    String?
+  /// Which way a one-time code travels: whatsapp | sms | both.
+  /// "both" tries WhatsApp first and falls back to SMS.
+  otpChannel  String?
 
   // --- courier tracking (17TRACK) ---
   trackApiKey String?
@@ -89,6 +95,20 @@ model Shop {
   messages  MessageLog[]
   carts     AbandonedCart[]
   inbound   InboundMessage[]
+  otps      OtpCode[]
+
+  /// Name of the Meta "Authentication" template that carries the code.
+  /// Left empty, the app uses zakdor_otp.
+  otpTemplate String?
+
+  /// The store's own order form at /apps/track/buy. Off until the merchant
+  /// has tested it - it writes real orders.
+  formEnabled Boolean @default(false)
+  /// How much cheaper paying online is, in rupees. Shown on the form and
+  /// applied by the discount code below at Shopify's checkout.
+  prepaidOff  String?
+  /// The Shopify discount code that takes that amount off.
+  prepaidCode String?
 
   /// When the customer presses Cancel we do not cancel straight away - a
   /// cancelled Shopify order can never be brought back. We wait, and if
@@ -329,4 +349,27 @@ model InboundMessage {
   createdAt DateTime @default(now())
 
   @@index([shopId, createdAt])
+}
+
+
+/// One-time codes sent over WhatsApp to prove a phone number is real.
+///
+/// The code itself is never written down - only a hash of it, mixed with
+/// the shop and the phone number, so one stolen row is worth nothing.
+model OtpCode {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  phone    String
+  codeHash String
+  /// Wrong guesses. Past five, the code is dead.
+  attempts Int    @default(0)
+
+  sentAt     DateTime  @default(now())
+  expiresAt  DateTime
+  verifiedAt DateTime?
+
+  @@index([shopId, phone])
+  @@index([expiresAt])
 }
