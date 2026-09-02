@@ -4,6 +4,7 @@ import { authenticate } from "../shopify.server";
 import { shopFromProxy, esc, liquid } from "../lib/proxy.server";
 import { STATUS_LABEL } from "../lib/track.server";
 import { money } from "../lib/templates.server";
+import { place, type Point } from "../lib/geo.server";
 
 /**
  * The actual tracking page - zakdor.com/apps/track
@@ -154,6 +155,18 @@ const CSS = `
 {text-align:center;color:inherit;opacity:.72;font-size:14px;margin-top:26px}
 .zt-help a
 {color:inherit;font-weight:600;text-decoration:underline}
+.zt-map
+{border:1px solid #e6e7ea;border-radius:16px;padding:18px;background:#fff;color:#16181d;margin-bottom:18px}
+.zt-map svg
+{display:block;width:100%;height:auto}
+.zt-mapt
+{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:12px}
+.zt-mapt p
+{margin:0}
+.zt-mapw
+{font-size:14px;font-weight:600}
+.zt-mapn
+{font-size:12px;color:#8a8d94;margin:12px 0 0;text-align:center}
 @media (max-width:600px)
 {
 .zt-h1{font-size:24px}
@@ -164,6 +177,97 @@ const CSS = `
 }
 </style>
 `;
+
+/**
+ * The parcel's road so far.
+ *
+ * Every scan that names a town becomes a real point, joined in the order the
+ * courier recorded them. The solid line is ground already covered; the dashed
+ * tail is what is left to your address. If fewer than two scans name a town
+ * we know, there is nothing honest to draw and the card does not appear.
+ */
+function journey(scans: any[], rec: any): string {
+  const byTime = scans
+    .slice()
+    .sort((a, b) => new Date(a?.time ?? 0).getTime() - new Date(b?.time ?? 0).getTime());
+
+  type Stop = { p: Point; desc: string; done: boolean };
+  const stops: Stop[] = [];
+
+  for (const s of byTime) {
+    const p = place(s?.location || s?.desc);
+    if (!p) continue;
+    const last = stops[stops.length - 1];
+    if (last && last.p.name === p.name) { last.desc = s?.desc || last.desc; continue; }
+    stops.push({ p, desc: String(s?.desc || ""), done: true });
+  }
+
+  const dest = place(rec?.city);
+  if (dest && (!stops.length || stops[stops.length - 1].p.name !== dest.name)) {
+    stops.push({ p: dest, desc: "Your address", done: false });
+  }
+  if (stops.length < 2) return "";
+
+  // Too many dots and the names sit on top of each other.
+  const shown = stops.length > 6 ? [stops[0], ...stops.slice(-5)] : stops;
+
+  const W = 680, H = 360, PAD = 0.12, RATIO = W / H, MIN_SPAN = 3.2;
+  const lats = shown.map((s) => s.p.lat), lons = shown.map((s) => s.p.lon);
+  const cLa = (Math.min(...lats) + Math.max(...lats)) / 2;
+  const cLo = (Math.min(...lons) + Math.max(...lons)) / 2;
+  let spanLa = Math.max(Math.max(...lats) - Math.min(...lats), MIN_SPAN);
+  let spanLo = Math.max(Math.max(...lons) - Math.min(...lons), MIN_SPAN);
+  if (spanLo / spanLa < RATIO) spanLo = spanLa * RATIO; else spanLa = spanLo / RATIO;
+
+  const x = (lo: number) => (((lo - (cLo - spanLo / 2)) / spanLo) * (1 - 2 * PAD) + PAD) * W;
+  const y = (la: number) => ((((cLa + spanLa / 2) - la) / spanLa) * (1 - 2 * PAD) + PAD) * H;
+
+  let grid = "";
+  for (let i = 1; i < 8; i++) {
+    grid += `<line x1="${(W / 8) * i}" y1="0" x2="${(W / 8) * i}" y2="${H}"/>`;
+    grid += `<line x1="0" y1="${(H / 8) * i}" x2="${W}" y2="${(H / 8) * i}"/>`;
+  }
+
+  const at = shown.map((s) => `${x(s.p.lon).toFixed(1)},${y(s.p.lat).toFixed(1)}`);
+  const lastDone = shown.reduce((n, s, i) => (s.done ? i : n), 0);
+  const solid = at.slice(0, lastDone + 1).join(" ");
+  const rest = at.slice(lastDone).join(" ");
+
+  let dots = "";
+  shown.forEach((s, i) => {
+    const cx = x(s.p.lon), cy = y(s.p.lat);
+    const here = i === lastDone && lastDone < shown.length - 1;
+    if (here) {
+      dots += `<circle cx="${cx}" cy="${cy}" r="7" fill="#16181d" opacity=".3">`
+        + `<animate attributeName="r" values="7;18;7" dur="2.4s" repeatCount="indefinite"/>`
+        + `<animate attributeName="opacity" values=".3;0;.3" dur="2.4s" repeatCount="indefinite"/></circle>`;
+    }
+    dots += s.done
+      ? `<circle cx="${cx}" cy="${cy}" r="6" fill="#16181d"/>`
+      : `<circle cx="${cx}" cy="${cy}" r="6.5" fill="#fff" stroke="#16181d" stroke-width="2.5"/>`;
+    const flip = cx > W * 0.78;
+    dots += `<text x="${cx + (flip ? -11 : 11)}" y="${cy + 4.5}" text-anchor="${flip ? "end" : "start"}" `
+      + `font-size="15" font-weight="600" fill="#16181d">${esc(s.p.name)}</text>`;
+  });
+
+  const from = shown[0].p.name, to = shown[shown.length - 1].p.name;
+
+  return `<div class="zt-map">
+    <div class="zt-mapt">
+      <div><p class="zt-lab">On the road</p><p class="zt-mapw">${esc(from)} &rarr; ${esc(to)}</p></div>
+    </div>
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Route from ${esc(from)} to ${esc(to)}">
+      <rect width="${W}" height="${H}" rx="12" fill="#f7f8fa"/>
+      <g stroke="#e9ebef" stroke-width="1">${grid}</g>
+      <polyline points="${rest}" fill="none" stroke="#c3c7ce" stroke-width="3"
+        stroke-dasharray="7 8" stroke-linecap="round"/>
+      <polyline points="${solid}" fill="none" stroke="#16181d" stroke-width="3.5"
+        stroke-linecap="round" stroke-linejoin="round"/>
+      ${dots}
+    </svg>
+    <p class="zt-mapn">Drawn from the courier's own scans. Indian couriers report the town, not the street.</p>
+  </div>`;
+}
 
 function shell(inner: string) {
   return `${CSS}<div class="zt-wrap">${inner}</div>`;
@@ -337,6 +441,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     ${note}
     ${meta ? `<div class="zt-meta">${meta}</div>` : ""}
   </div>
+
+  ${journey(scans, rec)}
 
   ${hist}
 
