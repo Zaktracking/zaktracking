@@ -170,6 +170,11 @@ model OrderRecord {
   itemLine String?
   city    String?
   address String?
+
+  /// Handle of the first real product on the order - "wireless-massage-gun".
+  /// The review request's button needs it, and by the time that goes out
+  /// Shopify's payload is long gone.
+  handle  String?
 }
 
 
@@ -372,4 +377,25 @@ model OtpCode {
 
   @@index([shopId, phone])
   @@index([expiresAt])
+}
+
+
+/// Someone who asked to be told when a sold-out item is back.
+/// One row per number per variant; notifiedAt is set once the message goes,
+/// so nobody is told twice about the same thing.
+model StockAlert {
+  id     String @id @default(cuid())
+  shopId String
+
+  phone     String
+  variantId String
+  handle    String
+  title     String
+  price     String?
+
+  createdAt  DateTime  @default(now())
+  notifiedAt DateTime?
+
+  @@unique([shopId, phone, variantId])
+  @@index([shopId, variantId])
 }

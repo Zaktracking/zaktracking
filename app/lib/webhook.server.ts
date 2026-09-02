@@ -156,6 +156,15 @@ export function isCodOrder(order: any): boolean {
  * Both handlers now call this same function, so whichever gets there
  * first - the row gets created and isCod gets filled in correctly.
  */
+/** The handle of the first real product on the order, if Shopify sent one. */
+function firstHandle(order: any): string | null {
+  for (const l of order?.line_items ?? []) {
+    const h = l?.product_handle ?? l?.handle ?? null;
+    if (h) return String(h);
+  }
+  return null;
+}
+
 export async function upsertOrder(shopId: string, order: any) {
   const cod = isCodOrder(order);
   const phone = pickPhone(order);
@@ -185,6 +194,10 @@ export async function upsertOrder(shopId: string, order: any) {
     itemLine: itemLine(order),
     city: addr?.city ?? null,
     address: shortAddress(order),
+
+    // The review request goes out days later, with a button that opens the
+    // product. By then Shopify's payload is gone, so the handle is kept here.
+    handle: firstHandle(order),
   };
 
   return db.orderRecord.upsert({

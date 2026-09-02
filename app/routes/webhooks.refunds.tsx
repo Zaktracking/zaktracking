@@ -1,0 +1,61 @@
+import type { ActionFunctionArgs } from "react-router";
+import { authenticate } from "../shopify.server";
+import { firstDelivery, ensureShop } from "../lib/webhook.server";
+import db from "../db.server";
+import { queueMessage, eventEnabled } from "../lib/notify.server";
+import { blankVars, money } from "../lib/templates.server";
+
+/**
+ * Money going back.
+ *
+ * A refund is the one moment a customer is most likely to think they have
+ * been forgotten, so it is worth a message even though it costs one. The
+ * amount is added up from the refund's own transactions - the order total
+ * is the wrong figure when only part of it comes back.
+ */
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { shop, topic, payload } = await authenticate.webhook(request);
+  if (!(await firstDelivery(request, topic, shop))) return new Response();
+
+  const refund = payload as any;
+  const s = await ensureShop(shop);
+  if (!eventEnabled(s, "refunded")) return new Response();
+
+  const rec = await db.orderRecord.findUnique({
+    where: { shopId_shopifyId: { shopId: s.id, shopifyId: String(refund.order_id) } },
+  });
+  if (!rec) {
+    console.log(`[refunds] order ${refund.order_id} is not one of ours`);
+    return new Response();
+  }
+
+  let paid = 0;
+  let via = "";
+  for (const t of refund.transactions ?? []) {
+    if (t?.status && t.status !== "success") continue;
+    const n = Number(t?.amount);
+    if (Number.isFinite(n)) paid += n;
+    if (!via && t?.gateway) via = String(t.gateway);
+  }
+  if (paid <= 0) {
+    console.log(`[refunds] ${rec.orderNumber}: nothing settled yet, no message`);
+    return new Response();
+  }
+
+  const v = blankVars();
+  v.name = rec.customerName || "there";
+  v.amount = money(String(paid), rec.currency);
+  v.order = rec.orderNumber;
+  v.item = rec.itemLine || "your order";
+  v.method = via || rec.gateway || "your original payment method";
+
+  await queueMessage({
+    shopId: s.id,
+    orderId: rec.id,
+    event: "refunded",
+    to: rec.phone,
+    vars: v,
+  });
+
+  return new Response();
+};

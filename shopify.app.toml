@@ -102,6 +102,18 @@ api_version = "2026-07"
   uri    = "/webhooks/orders/cancelled"
   topics = [ "orders/cancelled" ]
 
+# Money going back. Shopify fires this per refund, so a partial refund is
+# reported at its own amount, not the order's.
+[[webhooks.subscriptions]]
+  uri    = "/webhooks/refunds"
+  topics = [ "refunds/create" ]
+
+# The only webhook that carries a variant's new stock level. It is what
+# serves the "tell me when it is back" list.
+[[webhooks.subscriptions]]
+  uri    = "/webhooks/products"
+  topics = [ "products/update" ]
+
   # --- abandoned cart -> reminder 1 after ~1h, reminder 2 after ~24h.
   #     checkouts/update fires ten to fifteen times for a single shopper.
   #     Debounce on the checkout token, and cancel the whole sequence the

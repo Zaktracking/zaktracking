@@ -7,6 +7,7 @@ import {
 import { applyToShipment, FINAL } from "../lib/tracksync.server";
 import { sweepAbandoned } from "../lib/abandoned.server";
 import { sweepCancelRequests } from "../lib/inbound.server";
+import { sweepCodReminders, sweepReviewRequests } from "../lib/followups.server";
 
 /**
  * The clock job.
@@ -36,6 +37,8 @@ async function run() {
     changed: 0,
     abandoned1: 0,
     abandoned2: 0,
+    codReminders: 0,
+    reviews: 0,
     cancelled: 0,
     cancelTooLate: 0,
     notes: [] as string[],
@@ -156,6 +159,14 @@ async function run() {
   const cx = await sweepCancelRequests();
   out.cancelled = cx.cancelled;
   out.cancelTooLate = cx.tooLate;
+
+  /* ---------- 5. the messages no webhook can fire ----------
+     This runs for every shop, not only the ones with a tracking key: a COD
+     nudge needs nothing from the courier. */
+  for (const shop of await db.shop.findMany()) {
+    out.codReminders += await sweepCodReminders(shop);
+    out.reviews += await sweepReviewRequests(shop);
+  }
 
   console.log("[cron]", JSON.stringify(out));
   return out;
