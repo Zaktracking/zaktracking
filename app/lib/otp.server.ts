@@ -14,6 +14,7 @@
 import { createHash, randomInt } from "node:crypto";
 import db from "../db.server";
 import { sendSmsOtp } from "./sms.server";
+import { mcConfigured, mcSend, mcVerify } from "./mc.server";
 
 const GRAPH = "https://graph.facebook.com/v21.0";
 
@@ -111,7 +112,8 @@ export async function requestOtp(shopId: string, phone: string): Promise<OtpResu
   if (!shop) return { ok: false, reason: "Shop not found" };
   const anyChannel =
     (shop.waEnabled && shop.waToken && shop.waPhoneNumberId) ||
-    (shop.smsEnabled && shop.smsApiKey);
+    (shop.smsEnabled && shop.smsApiKey) ||
+    mcConfigured();
   if (!anyChannel) {
     return { ok: false, reason: "No way to send the code is set up yet" };
   }
@@ -143,11 +145,13 @@ export async function requestOtp(shopId: string, phone: string): Promise<OtpResu
   //              nobody is left without a code.
   const channel = (shop.otpChannel || "whatsapp").toLowerCase();
   const canWa = Boolean(shop.waEnabled && shop.waToken && shop.waPhoneNumberId);
-  const canSms = Boolean(shop.smsEnabled && shop.smsApiKey);
+  const canSms = Boolean((shop.smsEnabled && shop.smsApiKey) || mcConfigured());
 
   let delivered = false;
   let lastError = "";
   let usedChannel = "";
+  /** Message Central's verificationId, when the SMS went through them. */
+  let smsRef: string | null = null;
 
   /** So a failure is visible on the app's own page, not only in the logs. */
   async function note(ch: string, status: string, error: string | null) {
@@ -187,6 +191,17 @@ export async function requestOtp(shopId: string, phone: string): Promise<OtpResu
 
   async function trySms() {
     if (!canSms) return false;
+
+    // Message Central first when it is set up: it needs no DLT, and it
+    // makes its own code, so nothing of ours travels with the message.
+    if (mcConfigured()) {
+      const m = await mcSend(phone);
+      if (m.ok) { usedChannel = "sms"; smsRef = m.ref; return true; }
+      lastError = m.error;
+      console.log(`[otp] sms failed for ${phone}: ${lastError}`);
+      await note("sms", "failed", lastError);
+      if (!(shop!.smsEnabled && shop!.smsApiKey)) return false;
+    }
     const r = await sendSmsOtp({
       apiKey: shop!.smsApiKey!,
       phone,
@@ -234,6 +249,8 @@ export async function requestOtp(shopId: string, phone: string): Promise<OtpResu
       shopId,
       phone,
       codeHash: hash(shopId, phone, code),
+      provider: smsRef ? "mc" : "self",
+      ref: smsRef,
       expiresAt: new Date(Date.now() + TTL_MINUTES * 60 * 1000),
     },
   });
@@ -263,6 +280,29 @@ export async function verifyOtp(
 
   if (row.attempts >= MAX_ATTEMPTS) {
     return { ok: false, reason: "Too many wrong tries. Ask for a new code." };
+  }
+
+  // A code Message Central made is one we never saw, so they are the only
+  // ones who can say whether it matches.
+  if (row.provider === "mc" && row.ref) {
+    const v = await mcVerify(row.ref, clean);
+    if (!v.ok) {
+      await db.otpCode.update({
+        where: { id: row.id },
+        data: { attempts: { increment: 1 } },
+      });
+      const left = MAX_ATTEMPTS - (row.attempts + 1);
+      return {
+        ok: false,
+        reason: left > 0 ? `Wrong code. ${left} tries left.` : "Too many wrong tries. Ask for a new code.",
+      };
+    }
+    await db.otpCode.update({
+      where: { id: row.id },
+      data: { verifiedAt: new Date(), attempts: { increment: 1 } },
+    });
+    console.log(`[otp] ${phone} verified (sms)`);
+    return { ok: true };
   }
 
   if (row.codeHash !== hash(shopId, phone, clean)) {

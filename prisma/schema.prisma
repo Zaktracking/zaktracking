@@ -368,6 +368,10 @@ model OtpCode {
 
   phone    String
   codeHash String
+  /// "self" when we made the code, "mc" when Message Central holds it.
+  provider String @default("self")
+  /// Message Central's verificationId. Null on every self-made code.
+  ref      String?
   /// Wrong guesses. Past five, the code is dead.
   attempts Int    @default(0)
 
