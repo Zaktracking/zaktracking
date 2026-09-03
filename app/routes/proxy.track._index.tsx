@@ -590,7 +590,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const orderQ = (url.searchParams.get("order") ?? "").trim();
   const pin = (url.searchParams.get("pin") ?? "").trim();
 
-  if (!num && !orderQ) return liquid(page(blank));
+  // An order number with no last-4 yet is a link doing its job, not a
+  // mistake. Show the form with the number already in it.
+  if ((!num && !orderQ) || (orderQ && !pin)) {
+    return liquid(page({ ...blank, order: orderQ, pin }));
+  }
 
   /* ---------------- look it up ---------------- */
   let rec: any = null;

@@ -1,0 +1,38 @@
+api_version = "2026-07"
+
+[[extensions]]
+type   = "ui_extension"
+name   = "Track your order"
+handle = "track-order"
+uid    = "fd7c6774-6350-1e2d-c5ba-de384bc5254f867aaacb"
+
+  # Right after checkout.
+  [[extensions.targeting]]
+  target = "purchase.thank-you.block.render"
+  module = "./src/ThankYouBlock.jsx"
+
+  # The page a shopper lands on later from the confirmation email.
+  [[extensions.targeting]]
+  target = "customer-account.order-status.block.render"
+  module = "./src/OrderStatusBlock.jsx"
+
+  # The list of orders inside My Account.
+  [[extensions.targeting]]
+  target = "customer-account.order-index.block.render"
+  module = "./src/OrderIndexBlock.jsx"
+
+  # The profile page inside My Account.
+  [[extensions.targeting]]
+  target = "customer-account.profile.block.render"
+  module = "./src/ProfileBlock.jsx"
+
+  # The orders list and the profile page are the two places Shopify does not
+  # hand the extension the shop's own address, so it is asked for once here
+  # and typed into the checkout editor.
+  [extensions.settings]
+
+    [[extensions.settings.fields]]
+    key         = "tracking_url"
+    type        = "single_line_text_field"
+    name        = "Tracking page address"
+    description = "The full address of your tracking page, for example https://zakdor.com/apps/track"

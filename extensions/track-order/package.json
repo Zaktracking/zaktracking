@@ -1,0 +1,9 @@
+{
+  "name": "track-order",
+  "private": true,
+  "dependencies": {
+    "@preact/signals": "^2.11.1",
+    "@shopify/ui-extensions": "2026.7.x",
+    "preact": "^10.10.0"
+  }
+}
