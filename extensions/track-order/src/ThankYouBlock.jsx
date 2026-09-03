@@ -23,10 +23,7 @@ function Extension() {
   return (
     <s-section heading="Track your order">
       <s-stack direction="block" gap="base">
-        <s-text>
-          Follow your parcel from our warehouse to your door. You will need your
-          order number and the last 4 digits of your phone number.
-        </s-text>
+        <s-text>Follow your parcel from our warehouse to your door.</s-text>
         <s-button href={base + "/apps/track"} variant="primary">
           Track your order
         </s-button>
