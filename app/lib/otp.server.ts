@@ -45,7 +45,7 @@ function hash(shopId: string, phone: string, code: string): string {
 
 export type OtpResult =
   | { ok: true }
-  | { ok: false; reason: string; retryAfterSec?: number; detail?: string };
+  | { ok: false; reason: string; retryAfterSec?: number };
 
 /* ------------------------------------------------------------------ */
 /*  Sending                                                            */
@@ -226,12 +226,14 @@ export async function requestOtp(shopId: string, phone: string): Promise<OtpResu
   }
 
   if (!delivered) {
+    // The provider's own words go to the log and to the app's Recent
+    // messages, never to the shopper. "Complete website verification" or
+    // "DLT SMS API" is a message for the merchant; to a customer standing
+    // at a checkout it is noise that makes the store look broken.
+    console.log(`[otp] nothing sent to ${phone}: ${lastError || "no channel accepted the message"}`);
     return {
       ok: false,
       reason: "Could not send the code right now. Please try again in a minute.",
-      // The provider's own words. Without this a merchant is left guessing
-      // at a failure only the provider can explain.
-      detail: lastError || "no channel accepted the message",
     };
   }
 
