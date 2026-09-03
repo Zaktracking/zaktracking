@@ -26,8 +26,9 @@ automatically_update_urls_on_dev = true
 # read_fulfillments -> required by fulfillments/create and fulfillments/update
 # read_customers    -> the phone number WhatsApp and SMS are sent to
 # read_products     -> product title and image inside messages and on the page
+# read_discounts    -> check a discount code is real before it reaches an order
 # write_app_proxy   -> serve the tracking page under the merchant's own domain
-scopes = "read_orders,write_orders,read_checkouts,read_fulfillments,read_customers,read_products,write_app_proxy"
+scopes = "read_orders,write_orders,read_checkouts,read_fulfillments,read_customers,read_products,read_discounts,write_app_proxy"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 

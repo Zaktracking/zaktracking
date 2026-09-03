@@ -424,6 +424,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const phone = toE164(String(d.phone ?? ""));
   const zip = String(d.zip ?? "").replace(/\D/g, "");
+  // Two letters, the way Shopify writes an Indian state: BR, MH, DL.
+  const province = String(d.province ?? "").toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2) || null;
 
   if (!items.length) return Response.json({ ok: false, reason: "No product chosen" });
   if (!phone) return Response.json({ ok: false, reason: "Enter a valid mobile number" });
@@ -459,6 +461,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     email: String(d.email ?? "").trim().slice(0, 120) || null,
     address1: String(d.address1).trim().slice(0, 200),
     city: String(d.city).trim().slice(0, 60),
+    province,
     zip,
     note: "Placed on the store's own order form, phone verified by a one-time code",
   });

@@ -147,9 +147,13 @@ export async function discountValue(
  * the rest of the app treat it as COD.
  */
 export async function createCodOrder(domain: string, b: BuyerInput) {
+  // Shopify wants the plus sign; WhatsApp does not, and toE164 is shared
+  // with it. So the sign goes back on here rather than there.
+  const e164 = b.phone.charAt(0) === "+" ? b.phone : "+" + b.phone.replace(/\D/g, "");
+
   const order: any = {
     email: b.email || null,
-    phone: b.phone,
+    phone: e164,
     financialStatus: "PENDING",
     tags: "Cash on Delivery, zaktracking-form, otp-verified",
     note: b.note || null,
@@ -167,7 +171,7 @@ export async function createCodOrder(domain: string, b: BuyerInput) {
       provinceCode: b.province || null,
       zip: b.zip,
       countryCode: "IN",
-      phone: b.phone,
+      phone: e164,
     },
   };
   order.billingAddress = { ...order.shippingAddress };
