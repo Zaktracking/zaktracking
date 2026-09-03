@@ -193,7 +193,7 @@ export async function createCodOrder(domain: string, b: BuyerInput) {
        }`,
       {
         order,
-        options: { inventoryBehaviour: "DECREMENT_OBLIGATORY", sendReceipt: true },
+        options: { inventoryBehaviour: "DECREMENT_IGNORING_POLICY", sendReceipt: true },
       },
     );
 
