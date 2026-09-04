@@ -81,16 +81,16 @@ export async function applyToShipment(shipmentId: string, node: any) {
 
   // Only ask for cash when there is cash to ask for.
   //
-  // out_for_delivery already reads "Amount due: \u20b9{{5}}", rupee sign and
+  // out_for_delivery already reads "Amount due: ₹{{5}}", rupee sign and
   // all, so what goes in is a bare number - the balance, not the total, on
   // an order that was part-paid. An order with nothing left to collect
-  // still has to fill the slot, and it does so after the zero rather than
-  // instead of it, so nobody is asked to pay twice at the door.
+  // reads "₹0.00 (Paid)", the way a settled bill does, so nobody is asked
+  // to pay twice at the door.
   if (event === "out_for_delivery") {
     const due = Number(rec.outstanding ?? rec.totalPrice);
     v.amount = rec.isCod && Number.isFinite(due) && due > 0
       ? amountVar(String(due), rec.currency)
-      : "0 \u2014 already paid \u2705";
+      : "0.00 (Paid)";
   }
 
   await queueMessage({
