@@ -26,6 +26,8 @@ export type Vars = {
   code: string;      // WELCOME10
   handle: string;    // portable-blender
   cart: string;      // a7f3k9
+  save: string;      // 40 - the template already has the ₹
+  paylink: string;   // cmf1x2y3z4 - the order id the Pay Now button carries
 };
 
 type Def = {
@@ -40,7 +42,7 @@ export const EVENTS: Record<string, Def> = {
   order_created:    { template: "order_placed",      params: v => [v.name, v.order, v.item, v.amount, v.eta] },
   cod_confirm:      { template: "cod_confirm",       params: v => [v.name, v.order, v.item, v.amount] },
   cod_reminder:     { template: "cod_reminder",      params: v => [v.name, v.order, v.item, v.amount] },
-  cod_confirmed:    { template: "cod_confirmed",     params: v => [v.name, v.order, v.item, v.eta] },
+  cod_confirmed:    { template: "cod_confirmed",     params: v => [v.name, v.order, v.item, v.eta, v.save], button: v => v.paylink },
   order_paid:       { template: "payment_received",  params: v => [v.name, v.amount, v.order, v.item, v.eta] },
 
   shipped:          { template: "order_shipped",     params: v => [v.name, v.order, v.item, v.courier, v.tracking, v.eta], button: v => v.tracking },
@@ -65,6 +67,7 @@ export function blankVars(): Vars {
     name: "", order: "", item: "", amount: "", eta: "", courier: "",
     tracking: "", city: "", address: "", reason: "", attempts: "",
     date: "", method: "", code: "", handle: "", cart: "",
+    save: "", paylink: "",
   };
 }
 
@@ -137,10 +140,37 @@ export function amountDue(order: any): string | null {
 
 /** "INR 899" - so it always looks the same in every message. */
 export function money(amount?: string | null, currency?: string | null): string {
-  if (!amount) return "";
+  const n = num(amount);
+  if (n === null) return "";
+  const cur = String(currency || "INR").toUpperCase();
+  return cur === "INR" ? `\u20b9${n}` : `${cur} ${n}`;
+}
+
+/**
+ * The same amount, but for a WhatsApp template variable - no currency at
+ * all, just "1,794".
+ *
+ * Every template already has its own rupee sign typed in front of the
+ * variable, where Meta can see it and approve it. Sending "INR 1,794" into
+ * that slot printed "\u20b9INR 1,794" on the customer's phone.
+ */
+export function amountVar(amount?: string | null, _currency?: string | null): string {
+  return num(amount) ?? "";
+}
+
+/**
+ * 1794 -> "1,794" and 1794.2 -> "1,794.20". Paise are kept when there are
+ * any, because this is the figure a courier collects at the door and it
+ * has to match the order to the last coin.
+ */
+function num(amount?: string | null): string | null {
+  if (amount === null || amount === undefined || amount === "") return null;
   const n = Number(amount);
-  const clean = Number.isFinite(n) ? n.toLocaleString("en-IN") : amount;
-  return `${currency || "INR"} ${clean}`;
+  if (!Number.isFinite(n)) return String(amount);
+  return n.toLocaleString("en-IN", {
+    minimumFractionDigits: n % 1 === 0 ? 0 : 2,
+    maximumFractionDigits: 2,
+  });
 }
 
 /**

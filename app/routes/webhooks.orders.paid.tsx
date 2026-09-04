@@ -2,7 +2,10 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { firstDelivery, ensureShop, upsertOrder } from "../lib/webhook.server";
 import { queueMessage, eventEnabled } from "../lib/notify.server";
-import { blankVars, itemLine, money, etaRange, orderTotal } from "../lib/templates.server";
+import { blankVars, itemLine, money, amountVar, etaRange, orderTotal } from "../lib/templates.server";
+import { replacedOrderNumber } from "../lib/paynow.server";
+import { cancelOrder } from "../lib/orders.server";
+import db from "../db.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { shop, topic, payload } = await authenticate.webhook(request);
@@ -16,6 +19,33 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   // same second, and sometimes in the reverse order. Whichever lands first
   // creates the row and fills in isCod correctly.
   const rec = await upsertOrder(s.id, order);
+
+  // This order may be the paid replacement for a COD one - the customer
+  // took the Pay Now button on their confirmation. Now that the money is
+  // in, the COD original is cancelled, so nothing is ever packed twice.
+  const replaces = replacedOrderNumber(order);
+  if (replaces && replaces !== rec.orderNumber) {
+    const old = await db.orderRecord.findFirst({
+      where: { shopId: s.id, orderNumber: replaces, cancelledAt: null },
+    });
+    if (old) {
+      const done = await cancelOrder(
+        shop,
+        old.shopifyId,
+        `Paid online instead - replaced by ${rec.orderNumber}`,
+      );
+      if (done.ok) {
+        await db.orderRecord.update({
+          where: { id: old.id },
+          data: { cancelledAt: new Date() },
+        });
+      }
+      console.log(
+        `[orders/paid] ${rec.orderNumber} replaces ${replaces} - ` +
+          (done.ok ? "cancelled" : "could not cancel: " + done.error),
+      );
+    }
+  }
 
   // A COD order fires orders/paid too - but WEEKS LATER, when the courier
   // deposits the cash. Sending "Payment received" then reads as spam; the
@@ -42,7 +72,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   v.name = rec.customerName || "there";
   v.order = rec.orderNumber;
   v.item = itemLine(order);
-  v.amount = money(orderTotal(order), order.currency);
+  v.amount = amountVar(orderTotal(order), order.currency);
   v.eta = etaRange();
 
   await queueMessage({

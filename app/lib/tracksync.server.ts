@@ -1,7 +1,7 @@
 import db from "../db.server";
 import { normalize, failReason, inWords, type Norm } from "./track.server";
 import { queueMessage, eventEnabled } from "./notify.server";
-import { blankVars, money, stamp, etaRange } from "./templates.server";
+import { blankVars, amountVar, stamp, etaRange } from "./templates.server";
 
 /**
  * What to do when a courier scan arrives.
@@ -69,7 +69,7 @@ export async function applyToShipment(shipmentId: string, node: any) {
   // On a partial-payment COD order the balance is what the delivery agent
   // collects, not the order total. Asking for the total would be asking for
   // money the customer has already paid once.
-  v.amount = money(rec.outstanding ?? rec.totalPrice, rec.currency);
+  v.amount = amountVar(rec.outstanding ?? rec.totalPrice, rec.currency);
   v.courier = n.carrierName || sh.carrier || "our courier partner";
   v.tracking = sh.trackingNo || "";
   v.city = n.location || rec.city || "your city";
@@ -79,10 +79,18 @@ export async function applyToShipment(shipmentId: string, node: any) {
   v.reason = failReason(n.sub, n.desc);
   v.attempts = inWords(Math.max(n.attempts, 1));
 
-  // Only say "keep the cash ready" when the order really is COD.
+  // Only ask for cash when there is cash to ask for.
+  //
+  // out_for_delivery already reads "Amount due: \u20b9{{5}}", rupee sign and
+  // all, so what goes in is a bare number - the balance, not the total, on
+  // an order that was part-paid. An order with nothing left to collect
+  // still has to fill the slot, and it does so after the zero rather than
+  // instead of it, so nobody is asked to pay twice at the door.
   if (event === "out_for_delivery") {
     const due = Number(rec.outstanding ?? rec.totalPrice);
-    if (!rec.isCod || (Number.isFinite(due) && due <= 0)) v.amount = "Already paid";
+    v.amount = rec.isCod && Number.isFinite(due) && due > 0
+      ? amountVar(String(due), rec.currency)
+      : "0 \u2014 already paid \u2705";
   }
 
   await queueMessage({

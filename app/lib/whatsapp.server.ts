@@ -49,6 +49,7 @@ export async function sendTemplate(opts: {
   // ---------------------------------------------------------------
   let params = [...opts.params];
   let buttonParam = opts.buttonParam ?? null;
+  let buttonIndex = 0;
   let specLanguage: string | null = null;
 
   if (opts.wabaId && !opts.language) {
@@ -78,7 +79,11 @@ export async function sendTemplate(opts: {
       if (!spec.urlVar && buttonParam) {
         console.log(`[whatsapp] ${opts.template} has a static button - dropping its parameter`);
         buttonParam = null;
-      } else if (spec.urlVar && !buttonParam) {
+      } else if (spec.urlVar) {
+        buttonIndex = spec.urlIndex;
+      }
+
+      if (spec.urlVar && !buttonParam) {
         return {
           ok: false,
           error: `[params] ${opts.template} has a dynamic button but no value for it - not sent`,
@@ -101,7 +106,7 @@ export async function sendTemplate(opts: {
     components.push({
       type: "button",
       sub_type: "url",
-      index: "0",
+      index: String(buttonIndex),
       parameters: [{ type: "text", text: buttonParam }],
     });
   }
@@ -244,6 +249,10 @@ export async function templateSpec(wabaId: string, token: string, name: string) 
 
   let bodyVars = 0;
   let urlVar = false;
+  // Which button the variable belongs to. A template may carry two URL
+  // buttons - Pay Now and Track order, say - and the parameter has to be
+  // addressed to the right one or it lands in the wrong link.
+  let urlIndex = 0;
 
   for (const c of t.components ?? []) {
     const type = String(c?.type ?? "").toUpperCase();
@@ -254,8 +263,11 @@ export async function templateSpec(wabaId: string, token: string, name: string) 
       }
     }
     if (type === "BUTTONS") {
-      for (const b of c?.buttons ?? []) {
+      const list = c?.buttons ?? [];
+      for (let i = 0; i < list.length; i++) {
+        const b = list[i];
         if (String(b?.type ?? "").toUpperCase() === "URL" && /\{\{\s*\d+\s*\}\}/.test(String(b?.url ?? ""))) {
+          if (!urlVar) urlIndex = i;
           urlVar = true;
         }
       }
@@ -268,6 +280,7 @@ export async function templateSpec(wabaId: string, token: string, name: string) 
     status: t.status as string,
     bodyVars,
     urlVar,
+    urlIndex,
   };
 }
 

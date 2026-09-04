@@ -11,7 +11,7 @@
 
 import db from "../db.server";
 import { queueMessage, eventEnabled } from "./notify.server";
-import { blankVars, money } from "./templates.server";
+import { blankVars, money, amountVar } from "./templates.server";
 
 const HOUR = 60 * 60 * 1000;
 
@@ -64,7 +64,7 @@ export async function sweepCodReminders(shop: any): Promise<number> {
     v.name = o.customerName || "there";
     v.order = o.orderNumber;
     v.item = o.itemLine || "your order";
-    v.amount = money(o.outstanding || o.totalPrice, o.currency);
+    v.amount = amountVar(o.outstanding || o.totalPrice, o.currency);
 
     const row = await queueMessage({
       shopId: shop.id,
@@ -156,7 +156,7 @@ export async function notifyBackInStock(
     const v = blankVars();
     v.name = "there";
     v.item = a.title;
-    v.amount = money(price ?? a.price, "INR");
+    v.amount = amountVar(price ?? a.price, "INR");
     v.handle = a.handle;
 
     const row = await queueMessage({

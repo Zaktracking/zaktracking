@@ -3,7 +3,7 @@ import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { firstDelivery, ensureShop, upsertOrder } from "../lib/webhook.server";
 import { queueMessage, eventEnabled } from "../lib/notify.server";
-import { blankVars, itemLine, money, orderTotal } from "../lib/templates.server";
+import { blankVars, itemLine, money, amountVar, orderTotal } from "../lib/templates.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { shop, topic, payload } = await authenticate.webhook(request);
@@ -25,7 +25,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   v.name = rec.customerName || "there";
   v.order = rec.orderNumber;
   v.item = itemLine(order);
-  v.amount = money(orderTotal(order), order.currency);
+  v.amount = amountVar(orderTotal(order), order.currency);
 
   await queueMessage({
     shopId: s.id,

@@ -1,6 +1,6 @@
 import db from "../db.server";
 import { queueMessage, eventEnabled } from "./notify.server";
-import { blankVars, money } from "./templates.server";
+import { blankVars, money, amountVar } from "./templates.server";
 
 /**
  * Abandoned cart.
@@ -42,7 +42,7 @@ export async function sweepAbandoned() {
       const v = blankVars();
       v.name = c.name || "there";
       v.item = c.itemCount > 1 ? `${c.itemCount} items` : "your item";
-      v.amount = money(c.total, c.currency);
+      v.amount = amountVar(c.total, c.currency);
       v.cart = c.token;
 
       await queueMessage({
@@ -84,7 +84,7 @@ export async function sweepAbandoned() {
       const v = blankVars();
       v.name = c.name || "there";
       v.item = c.itemCount > 1 ? `${c.itemCount} items` : "your item";
-      v.amount = money(c.total, c.currency);
+      v.amount = amountVar(c.total, c.currency);
       v.code = code;
       v.cart = c.token;
 

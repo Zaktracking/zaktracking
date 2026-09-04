@@ -15,6 +15,7 @@ import { queueMessage } from "./notify.server";
 import { blankVars, etaRange } from "./templates.server";
 import { optOut } from "./notify.server";
 import { tagOrder, orderState, cancelOrder } from "./orders.server";
+import { savingLine } from "./paynow.server";
 
 export const TAG_CONFIRMED = "cod-confirmed";
 export const TAG_CANCEL_REQUESTED = "cod-cancel-requested";
@@ -148,6 +149,11 @@ export async function handleInbound(opts: {
       v.order = order.orderNumber;
       v.item = order.itemLine || "your order";
       v.eta = etaRange();
+      // The saving, and the order id the Pay Now button carries. The order
+      // is settled and nothing has shipped: this is the one moment the
+      // pay-online offer is worth making, and it rides on the same message.
+      v.save = await savingLine({ shop, order, domain: opts.domain });
+      v.paylink = order.id;
 
       await queueMessage({
         shopId: opts.shopId,
