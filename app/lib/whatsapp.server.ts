@@ -201,6 +201,105 @@ export async function sendTemplate(opts: {
   }
 }
 
+/**
+ * Plain text, no template.
+ *
+ * Meta allows this only inside the 24 hours after the customer wrote to
+ * us - which is exactly when we use it, in the reply to their own message.
+ * No category, so nothing here can be reclassified as marketing, and no
+ * per-user marketing limit can hold it back.
+ */
+export async function sendText(opts: {
+  phoneNumberId: string;
+  token: string;
+  to: string;
+  body: string;
+}): Promise<SendResult> {
+  try {
+    const res = await fetch(`${GRAPH}/${opts.phoneNumberId}/messages`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${opts.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: opts.to,
+        type: "text",
+        text: { preview_url: false, body: opts.body },
+      }),
+    });
+
+    const json: any = await res.json().catch(() => ({}));
+    if (res.ok && json?.messages?.[0]?.id) return { ok: true, id: json.messages[0].id };
+
+    const err = json?.error ?? {};
+    const code = Number(err.code ?? 0);
+    const msg = err.message || `HTTP ${res.status}`;
+    // 131047 is the window having closed - nothing to retry there either.
+    const permanent = [100, 131009, 131026, 131047, 131051].includes(code);
+    return { ok: false, error: `[${code}] ${msg}`, permanent };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? e), permanent: false };
+  }
+}
+
+/**
+ * Plain text with a real button under it, and still no template.
+ *
+ * Meta calls this an interactive call-to-action URL message. Inside an
+ * open service window any message type is allowed, so this needs no
+ * approval and carries no category - and a labelled button is tapped far
+ * more often than a raw link, which people are right to distrust.
+ *
+ * Label is capped at 20 characters and the body at 1024 by Meta; both are
+ * trimmed here rather than left for the API to refuse.
+ */
+export async function sendCta(opts: {
+  phoneNumberId: string;
+  token: string;
+  to: string;
+  body: string;
+  label: string;
+  url: string;
+}): Promise<SendResult> {
+  try {
+    const res = await fetch(`${GRAPH}/${opts.phoneNumberId}/messages`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${opts.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: opts.to,
+        type: "interactive",
+        interactive: {
+          type: "cta_url",
+          body: { text: opts.body.slice(0, 1024) },
+          action: {
+            name: "cta_url",
+            parameters: { display_text: opts.label.slice(0, 20), url: opts.url },
+          },
+        },
+      }),
+    });
+
+    const json: any = await res.json().catch(() => ({}));
+    if (res.ok && json?.messages?.[0]?.id) return { ok: true, id: json.messages[0].id };
+
+    const err = json?.error ?? {};
+    const code = Number(err.code ?? 0);
+    const msg = err.message || `HTTP ${res.status}`;
+    const permanent = [100, 131009, 131026, 131047, 131051].includes(code);
+    return { ok: false, error: `[${code}] ${msg}`, permanent };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? e), permanent: false };
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /*  Template name -> language                                          */
 /* ------------------------------------------------------------------ */

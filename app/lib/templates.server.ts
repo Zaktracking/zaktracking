@@ -26,8 +26,6 @@ export type Vars = {
   code: string;      // WELCOME10
   handle: string;    // portable-blender
   cart: string;      // a7f3k9
-  save: string;      // 40 - the template already has the ₹
-  paylink: string;   // cmf1x2y3z4 - the order id the Pay Now button carries
 };
 
 type Def = {
@@ -42,7 +40,7 @@ export const EVENTS: Record<string, Def> = {
   order_created:    { template: "order_placed",      params: v => [v.name, v.order, v.item, v.amount, v.eta] },
   cod_confirm:      { template: "cod_confirm",       params: v => [v.name, v.order, v.item, v.amount] },
   cod_reminder:     { template: "cod_reminder",      params: v => [v.name, v.order, v.item, v.amount] },
-  cod_confirmed:    { template: "cod_confirmed",     params: v => [v.name, v.order, v.item, v.eta, v.save], button: v => v.paylink },
+  cod_confirmed:    { template: "cod_confirmed",     params: v => [v.name, v.order, v.item, v.eta] },
   order_paid:       { template: "payment_received",  params: v => [v.name, v.amount, v.order, v.item, v.eta] },
 
   shipped:          { template: "order_shipped",     params: v => [v.name, v.order, v.item, v.courier, v.tracking, v.eta], button: v => v.tracking },
@@ -67,7 +65,6 @@ export function blankVars(): Vars {
     name: "", order: "", item: "", amount: "", eta: "", courier: "",
     tracking: "", city: "", address: "", reason: "", attempts: "",
     date: "", method: "", code: "", handle: "", cart: "",
-    save: "", paylink: "",
   };
 }
 

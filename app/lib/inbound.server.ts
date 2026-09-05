@@ -15,7 +15,7 @@ import { queueMessage } from "./notify.server";
 import { blankVars, etaRange } from "./templates.server";
 import { optOut } from "./notify.server";
 import { tagOrder, orderState, cancelOrder } from "./orders.server";
-import { savingLine } from "./paynow.server";
+import { offerPayNow } from "./paynow.server";
 
 export const TAG_CONFIRMED = "cod-confirmed";
 export const TAG_CANCEL_REQUESTED = "cod-cancel-requested";
@@ -149,11 +149,6 @@ export async function handleInbound(opts: {
       v.order = order.orderNumber;
       v.item = order.itemLine || "your order";
       v.eta = etaRange();
-      // The saving, and the order id the Pay Now button carries. The order
-      // is settled and nothing has shipped: this is the one moment the
-      // pay-online offer is worth making, and it rides on the same message.
-      v.save = await savingLine({ shop, order, domain: opts.domain });
-      v.paylink = order.id;
 
       await queueMessage({
         shopId: opts.shopId,
@@ -163,6 +158,15 @@ export async function handleInbound(opts: {
         vars: v,
       });
     }
+
+    // The confirmation has gone; now the offer, as its own plain-text
+    // message. The customer wrote to us a moment ago, so the 24-hour
+    // window is open and this needs no template - which is the point.
+    // Put a saving inside cod_confirmed and Meta reclassifies the whole
+    // template as marketing, where it is charged and can be held back by
+    // per-user limits. An order confirmation must never be held back.
+    await offerPayNow({ shop, order, domain: opts.domain, to: opts.from });
+
     return { intent, duplicate: false };
   }
 
