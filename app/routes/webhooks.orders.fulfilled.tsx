@@ -2,7 +2,7 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { firstDelivery, ensureShop, upsertOrder } from "../lib/webhook.server";
 import { queueMessage, eventEnabled } from "../lib/notify.server";
-import { blankVars, itemLine, etaRange } from "../lib/templates.server";
+import { blankVars, itemLine, etaDate } from "../lib/templates.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { shop, topic, payload } = await authenticate.webhook(request);
@@ -23,7 +23,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   v.item = itemLine(order);
   v.courier = f?.tracking_company || "our courier partner";
   v.tracking = f?.tracking_number || "";
-  v.eta = etaRange();
+  // Four working days from the hand-over, as "arriving by 12 September".
+  v.eta = etaDate(new Date(), 4);
 
   if (!eventEnabled(s, "shipped")) return new Response();
 

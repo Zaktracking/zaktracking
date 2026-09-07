@@ -143,7 +143,10 @@ export async function requestOtp(shopId: string, phone: string): Promise<OtpResu
   //   both     - WhatsApp first, SMS only if that fails. This is the one
   //              worth having: the cheap route carries almost everyone, and
   //              nobody is left without a code.
-  const channel = (shop.otpChannel || "whatsapp").toLowerCase();
+  // Left unset, SMS goes first: it reaches every phone and lands in the
+  // app the shopper is already typing in. With no SMS provider configured
+  // trySms() answers false at once and WhatsApp carries the code as before.
+  const channel = (shop.otpChannel || "sms").toLowerCase();
   const canWa = Boolean(shop.waEnabled && shop.waToken && shop.waPhoneNumberId);
   const canSms = Boolean((shop.smsEnabled && shop.smsApiKey) || mcConfigured());
 

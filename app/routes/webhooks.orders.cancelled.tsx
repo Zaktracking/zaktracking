@@ -3,7 +3,7 @@ import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { firstDelivery, ensureShop, upsertOrder } from "../lib/webhook.server";
 import { queueMessage, eventEnabled } from "../lib/notify.server";
-import { blankVars, itemLine, money, amountVar, orderTotal } from "../lib/templates.server";
+import { blankVars, itemLine, amountVar, orderTotal } from "../lib/templates.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { shop, topic, payload } = await authenticate.webhook(request);
@@ -20,6 +20,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   });
 
   if (!eventEnabled(s, "cancelled")) return new Response();
+
+  // The COD twin of an order that was just paid online: from where the
+  // customer stands nothing was cancelled - they paid, and the payment
+  // message has already thanked them. A cancellation notice now would only
+  // alarm them.
+  if (rec.cancelReason === "paid_online") {
+    console.log(`[cancelled] ${rec.orderNumber} was replaced by an online payment - no message`);
+    return new Response();
+  }
 
   const v = blankVars();
   v.name = rec.customerName || "there";

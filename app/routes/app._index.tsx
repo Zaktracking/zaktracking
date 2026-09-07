@@ -82,8 +82,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   // rather than finding out from a failed send.
   const blank = blankVars();
   const ours = new Map<string, number>();
+  const oursOld = new Map<string, number>();
   for (const def of Object.values(EVENTS)) {
     ours.set(def.template, def.params(blank).length);
+    if (def.old) oursOld.set(def.template, def.old(blank).length);
   }
 
   function bodyVarsOf(t: any): number {
@@ -104,11 +106,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       language: t.language,
       needs: bodyVarsOf(t),
       sends: ours.has(t.name) ? ours.get(t.name)! : null,
+      sendsOld: oursOld.get(t.name) ?? null,
     }))
     .sort((a: any, b: any) => String(a.name).localeCompare(String(b.name)));
 
+  // The keys never leave the server whole. The page shows their last four
+  // characters - enough to tell one key from another, useless to anyone
+  // reading the page's data in the browser.
+  const mask = (v: string | null) => (v ? "\u2022\u2022\u2022\u2022" + v.slice(-4) : "");
+  const safeShop = {
+    ...shop,
+    waToken: mask(shop.waToken),
+    smsApiKey: mask(shop.smsApiKey),
+    trackApiKey: mask(shop.trackApiKey),
+  };
+
   return {
-    shop, messages, orders, queued, live, missing, templateList, parcels, tracked,
+    shop: safeShop, messages, orders, queued, live, missing, templateList, parcels, tracked,
     replies, awaitingCancel,
     domain: session.shop,
     appUrl: process.env.SHOPIFY_APP_URL ?? "",
@@ -120,9 +134,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shop = await ensureShop(session.shop);
   const fd = await request.formData();
-  const intent = String(fd.get("intent") || "");
+  // The settings form carries intent=save, and each Remove button adds an
+  // intent of its own when it is the one pressed - that one wins.
+  const intents = fd.getAll("intent").map(String);
+  const intent = intents.find((i) => i.startsWith("remove:")) ?? intents[0] ?? "";
 
   console.log(`[admin] action reached: intent="${intent}" shop=${session.shop}`);
+
+  if (intent.startsWith("remove:")) {
+    const key = intent.slice(7);
+    const allowed: Record<string, string> = { waToken: "WhatsApp token", smsApiKey: "Fast2SMS key", trackApiKey: "17TRACK key" };
+    if (!allowed[key]) return { ok: false, msg: "Could not understand that request" };
+    await db.shop.update({ where: { id: shop.id }, data: { [key]: null } });
+    console.log(`[admin] removed ${key}`);
+    return { ok: true, msg: `${allowed[key]} removed` };
+  }
 
   if (intent === "save") {
     const str = (k: string) => {
@@ -148,11 +174,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         smsSenderId: str("smsSenderId"),
         smsRoute: str("smsRoute"),
         formEnabled: on("formEnabled"),
-        prepaidOff: str("prepaidOff"),
         prepaidCode: str("prepaidCode"),
         waEnabled: on("waEnabled"),
         onOrderCreate: on("onOrderCreate"),
         codConfirm: on("codConfirm"),
+        onCodConfirm: on("onCodConfirm"),
+        onCodReminder: on("onCodReminder"),
+        onCodConfirmed: on("onCodConfirmed"),
+        codReminderHours: Math.min(48, Math.max(1, Number(fd.get("codReminderHours")) || 6)),
+        autoConfirm: on("autoConfirm"),
+        autoConfirmMin: Math.min(1440, Math.max(5, Number(fd.get("autoConfirmMin")) || 30)),
+        // Stored the way WhatsApp writes a number - 91 and ten digits, no
+        // plus - so it compares straight against the sender of a reply.
+        ownerPhone: toE164(str("ownerPhone") ?? "") ?? null,
+        ownerAlerts: on("ownerAlerts"),
         onOrderPaid: on("onOrderPaid"),
         onFulfilled: on("onFulfilled"),
         onInTransit: on("onInTransit"),
@@ -213,7 +248,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     const SAMPLES = [
-      "Sadik", "Z1005", "Portable Blender", "INR 899", "3-7 September",
+      "Sadik", "Z1005", "Portable Blender", "899", "14 September",
       "Delhivery", "1234567890", "Patna", "Bettiah, Bihar 845438", "WELCOME10",
     ];
     const params = SAMPLES.slice(0, spec?.bodyVars ?? 0);
@@ -325,6 +360,37 @@ function Check({ label, name, defaultChecked, help }: any) {
   );
 }
 
+/**
+ * A key that is already stored. The page never has the whole key - only
+ * its last four characters - so there is nothing to show but those, a
+ * Change button that opens a box for a new one, and a Remove button.
+ * Leaving the box empty on Save keeps the stored key.
+ */
+function Secret({ label, name, masked, help }: any) {
+  const [edit, setEdit] = useState(!masked);
+  const small = { ...S.btn, padding: "6px 12px", fontSize: 13 } as React.CSSProperties;
+  return (
+    <div style={S.field}>
+      <label style={S.label} htmlFor={name}>{label}</label>
+      {edit ? (
+        <input style={S.input} id={name} name={name} type="password" autoComplete="off"
+          placeholder={masked ? "paste the new one, or leave empty to keep the current one" : "not set yet"} />
+      ) : (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <code style={{ ...S.code, padding: "6px 10px" }}>{masked}</code>
+          <button type="button" style={small} onClick={() => setEdit(true)}>Change</button>
+          <button type="submit" name="intent" value={`remove:${name}`}
+            style={{ ...small, background: "#fff", color: "#8e1c22", border: "1px solid #8e1c22" }}
+            onClick={(e) => { if (!window.confirm(`Remove the stored ${label}?`)) e.preventDefault(); }}>
+            Remove
+          </button>
+        </div>
+      )}
+      {help && <p style={S.help}>{help}</p>}
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 
 export default function Index() {
@@ -401,12 +467,10 @@ export default function Index() {
             defaultValue={shop.waWabaId ?? ""}
             help="This keeps the template list and their status visible here" />
 
-          <Text label="Permanent access token" name="waToken" type="password"
-            placeholder={shop.waToken ? "•••••••• (already saved)" : "EAAx..."}
-            help="Leave it empty to keep the current one. Do not share it with anyone." />
+          <Secret label="Permanent access token" name="waToken" masked={shop.waToken}
+            help="From a system user in Meta Business settings. Do not share it with anyone." />
 
-          <Text label="17TRACK API key" name="trackApiKey" type="password"
-            placeholder={shop.trackApiKey ? "•••••••• (saved)" : "not set yet"}
+          <Secret label="17TRACK API key" name="trackApiKey" masked={shop.trackApiKey}
             help="Out for delivery and Delivered come from this. 100 trackings free a month." />
 
           <Text label="Abandoned cart discount code" name="abandonCode"
@@ -416,24 +480,23 @@ export default function Index() {
 
           <div style={S.field}>
             <label style={S.label} htmlFor="otpChannel">How the one-time code is sent</label>
-            <select style={S.input} id="otpChannel" name="otpChannel" defaultValue={shop.otpChannel ?? "whatsapp"}>
+            <select style={S.input} id="otpChannel" name="otpChannel" defaultValue={shop.otpChannel ?? "sms"}>
+              <option value="sms">SMS first, WhatsApp if the SMS cannot be sent — recommended</option>
+              <option value="both">WhatsApp first, SMS if that fails</option>
               <option value="whatsapp">WhatsApp only — about ₹0.14 a code</option>
-              <option value="both">WhatsApp first, SMS if that fails — recommended</option>
-              <option value="sms">SMS only</option>
             </select>
             <p style={S.help}>
-              WhatsApp is far cheaper but reaches only numbers that have it. "WhatsApp first"
-              keeps the cost low and still leaves nobody without a code.
+              A code by SMS reaches every phone, including the ones without WhatsApp, and
+              lands in the same app the shopper is typing into. Until an SMS provider is set up
+              below, every choice here still falls back to WhatsApp.
             </p>
           </div>
 
           <Check label="Turn on SMS" name="smsEnabled" defaultChecked={shop.smsEnabled}
             help="Needs a Fast2SMS API key below. Their OTP route needs no DLT registration." />
 
-          <Text label="Fast2SMS API key" name="smsApiKey" type="password"
-            defaultValue=""
-            placeholder={shop.smsApiKey ? "•••••••• (leave empty to keep it)" : "paste the key"}
-            help="Fast2SMS dashboard → Dev API. Leave this empty on later saves and the stored key is kept." />
+          <Secret label="Fast2SMS API key" name="smsApiKey" masked={shop.smsApiKey}
+            help="Fast2SMS dashboard → Dev API." />
 
           <div style={S.field}>
             <label style={S.label} htmlFor="smsRoute">SMS route</label>
@@ -459,10 +522,25 @@ export default function Index() {
           <hr style={{ border: 0, borderTop: "1px solid #e3e3e3", margin: "18px 0" }} />
           <h2 style={S.h2}>Which messages to send</h2>
 
-          <Check label="Order received" name="onOrderCreate" defaultChecked={shop.onOrderCreate} />
-          <Check label="Ask for COD confirmation" name="codConfirm" defaultChecked={shop.codConfirm}
-            help="This prevents the most RTO. A callback URL is needed to receive the button reply — that is still pending." />
+          <Check label="Order placed" name="onOrderCreate" defaultChecked={shop.onOrderCreate}
+            help="Only for a Cash-on-Delivery order when the confirmation ask below is off. A prepaid order gets Payment received instead, never both." />
           <Check label="Payment received (prepaid only)" name="onOrderPaid" defaultChecked={shop.onOrderPaid} />
+
+          <div style={{ margin: "6px 0 12px", padding: "12px 14px", background: "#f7f7f7", borderRadius: 10 }}>
+            <Check label="Cash on Delivery confirmation" name="codConfirm" defaultChecked={shop.codConfirm}
+              help="The whole conversation: the ask, a reminder, and the confirmation. This prevents the most RTO." />
+            <div style={{ paddingLeft: 24 }}>
+              <Check label="The ask, right after the order" name="onCodConfirm" defaultChecked={shop.onCodConfirm} />
+              <Check label="One reminder if there is no reply" name="onCodReminder" defaultChecked={shop.onCodReminder} />
+              <Text label="Hours to wait before the reminder" name="codReminderHours" type="number"
+                defaultValue={String(shop.codReminderHours)} help="Between 1 and 48." />
+              <Check label="Confirmation message once the order is confirmed" name="onCodConfirmed" defaultChecked={shop.onCodConfirmed} />
+              <Check label="Treat silence as yes" name="autoConfirm" defaultChecked={shop.autoConfirm}
+                help="Still no reply after the reminder: the order is confirmed and packed. It is tagged cod-auto-confirmed in Shopify so you can tell those apart. Nothing is ever cancelled for silence." />
+              <Text label="Minutes after the reminder before that happens" name="autoConfirmMin" type="number"
+                defaultValue={String(shop.autoConfirmMin)} help="Between 5 and 1440. The cron runs every 10 minutes, so add up to 10 minutes to this." />
+            </div>
+          </div>
           <Check label="Shipped + tracking" name="onFulfilled" defaultChecked={shop.onFulfilled} />
           <Check label="In transit" name="onInTransit" defaultChecked={shop.onInTransit}
             help="Goes out once per order, the first time the courier scans it in transit - not on every hub. Worth turning on only for long routes, where it reassures. On a three-day delivery it lands right after the shipped message and reads as a repeat." />
@@ -480,15 +558,20 @@ export default function Index() {
           <Check label="Turn the order form on" name="formEnabled" defaultChecked={shop.formEnabled}
             help="The page at /apps/track/buy. It writes real orders, so leave it off until you have placed a test order yourself." />
 
-          <Text label="Discount for paying online (₹)" name="prepaidOff"
-            defaultValue={shop.prepaidOff ?? ""}
-            placeholder="35"
-            help="Shown on the form as the saving, and taken off at Shopify's checkout by the code below." />
-
-          <Text label="Discount code for that saving" name="prepaidCode"
+          <Text label="Discount code for paying online, two items or more" name="prepaidCode"
             defaultValue={shop.prepaidCode ?? ""}
             placeholder="PREPAID35"
-            help="Must exist in Shopify with exactly this amount off. If the two do not match, the form promises one figure and the checkout charges another." />
+            help="Paying online saves ₹30 on a single item (code PREPAID30, built in) and ₹20 on each item when there are more - this code must take exactly ₹20 off every item in Shopify. The order form, the popup and the Pay Now message all promise these figures." />
+
+          <hr style={{ border: 0, borderTop: "1px solid #e3e3e3", margin: "18px 0" }} />
+          <h2 style={S.h2}>Your own WhatsApp</h2>
+
+          <Text label="Your mobile number" name="ownerPhone"
+            defaultValue={shop.ownerPhone ? String(shop.ownerPhone).replace(/^91(\d{10})$/, "$1") : ""}
+            placeholder="9876543210"
+            help="Whatever a customer writes back - a new address, a complaint, a message the app could not read - is forwarded here, with what the app replied. Needs the owner_alert template approved in Meta." />
+          <Check label="Forward customer replies to that number" name="ownerAlerts" defaultChecked={shop.ownerAlerts}
+            help="Confirm and Cancel taps are handled by the app and not forwarded; everything a customer types is." />
 
           <hr style={{ border: 0, borderTop: "1px solid #e3e3e3", margin: "18px 0" }} />
           <h2 style={S.h2}>When a customer cancels on WhatsApp</h2>
@@ -508,8 +591,8 @@ export default function Index() {
             Currently stored: phone number ID{" "}
             <b>{shop.waPhoneNumberId ?? "not set"}</b>, WABA ID{" "}
             <b>{shop.waWabaId ?? "not set"}</b>, token{" "}
-            <b>{shop.waToken ? "set" : "not set"}</b>, 17TRACK key{" "}
-            <b>{shop.trackApiKey ? "set" : "not set"}</b>, sending{" "}
+            <b>{shop.waToken || "not set"}</b>, 17TRACK key{" "}
+            <b>{shop.trackApiKey || "not set"}</b>, sending{" "}
             <b>{shop.waEnabled ? "on" : "off"}</b>.
           </p>
         </Form>
@@ -574,6 +657,10 @@ export default function Index() {
                         <span style={{ color: "#616161" }}>not used</span>
                       ) : t.sends === t.needs ? (
                         <span style={{ color: "#0b5c2e" }}>{t.needs} — matches</span>
+                      ) : t.sendsOld === t.needs ? (
+                        <span style={{ color: "#7a5a00" }}>
+                          {t.needs} — matches the older wording; edit it in Meta when you can
+                        </span>
                       ) : t.sends > t.needs ? (
                         <span style={{ color: "#7a5a00" }}>
                           needs {t.needs}, app holds {t.sends} — extra ones are dropped
@@ -699,9 +786,11 @@ export default function Index() {
       <div style={S.card}>
         <h2 style={S.h2}>Customer replies</h2>
         <p style={{ ...S.help, marginBottom: 14 }}>
-          Everything customers send back. Replies only arrive once the Callback
-          URL is set in Meta:{" "}
-          <code style={S.code}>{appUrl}/webhooks/whatsapp</code>, with the
+          Everything customers send back, with the app's own answer under each.
+          A tap on Confirm, Cancel, Change address, Change phone number or Help is
+          acted on; anything else gets a short apology and a menu. Replies only
+          arrive once the Callback URL is set in Meta:{" "}
+          <code style={S.code}>{appUrl}/webhooks/whatsapp</code>, with the{" "}
           <code style={S.code}>messages</code> field subscribed.
         </p>
         {replies.length === 0 ? (
@@ -727,7 +816,15 @@ export default function Index() {
                       })}
                     </td>
                     <td style={S.td}>{r.from}</td>
-                    <td style={S.td}>{r.text}</td>
+                    <td style={S.td}>
+                      {r.text}
+                      {r.reply && (
+                        <div style={{ fontSize: 12, color: "#616161", marginTop: 4 }}>↳ {r.reply}</div>
+                      )}
+                      {r.forwarded && (
+                        <div style={{ fontSize: 11, color: "#0b5c2e", marginTop: 2 }}>forwarded to your WhatsApp</div>
+                      )}
+                    </td>
                     <td style={S.td}>{r.order?.orderNumber ?? "-"}</td>
                     <td style={S.td}>
                       <span style={{

@@ -3,7 +3,7 @@ import { authenticate } from "../shopify.server";
 import { firstDelivery, ensureShop } from "../lib/webhook.server";
 import db from "../db.server";
 import { queueMessage, eventEnabled } from "../lib/notify.server";
-import { blankVars, money, amountVar } from "../lib/templates.server";
+import { blankVars, amountVar } from "../lib/templates.server";
 
 /**
  * Money going back.
@@ -47,6 +47,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   v.amount = amountVar(String(paid), rec.currency);
   v.order = rec.orderNumber;
   v.item = rec.itemLine || "your order";
+  // Only the previous wording of the template still reads this; the
+  // gateway's name ("razorpay") is not what a customer calls their bank.
   v.method = via || rec.gateway || "your original payment method";
 
   await queueMessage({

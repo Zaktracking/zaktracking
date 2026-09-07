@@ -60,7 +60,27 @@ function textOf(message: any): { text: string; kind: string } {
       kind: "interactive",
     };
   }
-  return { text: `[${type}]`, kind: type || "other" };
+  // A pin dropped on the map is the most natural way to send a new
+  // address, and a shared contact card the most natural way to send a
+  // number - both are read as their words.
+  if (type === "location") {
+    const l = message.location ?? {};
+    const where = [l.name, l.address].filter(Boolean).join(", ");
+    return {
+      text: `${where ? where + " - " : ""}https://maps.google.com/?q=${l.latitude},${l.longitude}`,
+      kind: "location",
+    };
+  }
+  if (type === "contacts") {
+    const nums = (message.contacts ?? [])
+      .flatMap((c: any) => (c?.phones ?? []).map((p: any) => String(p?.wa_id || p?.phone || "")))
+      .filter(Boolean);
+    return { text: nums.join(", ") || "[contact]", kind: "contacts" };
+  }
+  // A photo or file with a caption is the caption; without one it is
+  // simply noted as what it was.
+  const caption = message?.[type]?.caption;
+  return { text: caption ? String(caption) : `[${type}]`, kind: type || "other" };
 }
 
 export async function action({ request }: ActionFunctionArgs) {

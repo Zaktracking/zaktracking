@@ -2,7 +2,7 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { firstDelivery, ensureShop, upsertOrder } from "../lib/webhook.server";
 import { queueMessage, eventEnabled } from "../lib/notify.server";
-import { blankVars, itemLine, money, amountVar, etaRange, orderTotal } from "../lib/templates.server";
+import { blankVars, itemLine, amountVar, etaDate, orderTotal } from "../lib/templates.server";
 import { markConverted } from "../lib/abandoned.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -24,11 +24,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   v.order = rec.orderNumber;
   v.item = itemLine(order);
   v.amount = amountVar(orderTotal(order), order.currency);
-  v.eta = etaRange();
+  v.eta = etaDate(new Date(), 7);
 
-  // For COD we ask for confirmation, for prepaid we send "order received".
-  // Getting COD confirmed cuts RTO (the parcel coming back) the most.
-  const event = rec.isCod && s.codConfirm ? "cod_confirm" : "order_created";
+  // A prepaid order says nothing here: orders/paid follows within seconds
+  // and its "payment received" is the confirmation - one message, not two
+  // that say the same thing. For COD we ask for confirmation, which cuts
+  // RTO (the parcel coming back) the most; with the ask switched off, a
+  // plain "order placed" goes instead.
+  if (!rec.isCod) return new Response();
+  const event = eventEnabled(s, "cod_confirm") ? "cod_confirm" : "order_created";
 
   if (eventEnabled(s, event)) {
     await queueMessage({

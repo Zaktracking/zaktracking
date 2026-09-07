@@ -18,9 +18,7 @@ import { shopFromProxy, esc, liquid } from "../lib/proxy.server";
 import { toE164 } from "../lib/webhook.server";
 import { isVerified } from "../lib/otp.server";
 import { variantInfo, createCodOrder, discountValue } from "../lib/order-create.server";
-
-const DEFAULT_PREPAID_OFF = "35";
-const DEFAULT_PREPAID_CODE = "PREPAID35";
+import { prepaidDeal } from "../lib/paynow.server";
 
 /** gid or bare number, both accepted from the link. */
 function toVariantGid(raw: string): string | null {
@@ -145,12 +143,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
      discount that is already printed on the page, and the product it is
      about to show. */
   if (wantsJson) {
-    const offJson = Number(shop.prepaidOff ?? DEFAULT_PREPAID_OFF) || 0;
+    const deal = prepaidDeal(shop, 2);
     const body: any = {
       ok: true,
       enabled: true,
-      off: offJson,
-      code: shop.prepaidCode || DEFAULT_PREPAID_CODE,
+      // the per-item saving and the code for it; the popup itself knows
+      // the single-item tier
+      off: deal.off / 2,
+      code: deal.code,
     };
 
     const askedFor = url.searchParams.get("v");
@@ -185,10 +185,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const unit = Number(v.price) || 0;
   const total = unit * qty;
-  const off = Number(shop.prepaidOff ?? DEFAULT_PREPAID_OFF) || 0;
+  const { off, code } = prepaidDeal(shop, qty);
   const prepaid = Math.max(0, total - off);
   const numericVariant = gid.split("/").pop() ?? "";
-  const code = shop.prepaidCode || DEFAULT_PREPAID_CODE;
 
   const title = v.variantTitle && v.variantTitle !== "Default Title"
     ? `${v.productTitle} - ${v.variantTitle}`

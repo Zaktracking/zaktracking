@@ -88,7 +88,26 @@ model Shop {
   onDelivered      Boolean @default(true)
   onCancelled      Boolean @default(true)
   onAbandoned      Boolean @default(false)
+  /// The whole Cash-on-Delivery conversation: the ask, the reminder, the
+  /// confirmation. Off, and a COD order is treated like any other order.
   codConfirm       Boolean @default(true)
+  /// Each of its three messages on its own switch besides.
+  onCodConfirm     Boolean @default(true)
+  onCodReminder    Boolean @default(true)
+  onCodConfirmed   Boolean @default(true)
+  /// Hours of silence after the ask before the reminder goes out.
+  codReminderHours Int     @default(6)
+  /// With still no reply this many minutes after the reminder, the order
+  /// is taken as confirmed and packed - a customer who wanted it cancelled
+  /// had two chances to say so, and most who stay silent do want it.
+  autoConfirm      Boolean @default(true)
+  autoConfirmMin   Int     @default(30)
+
+  // --- the merchant's own WhatsApp ---
+  /// Where customer replies are forwarded, as a template message. Empty,
+  /// and they are only kept in the inbox on the admin page.
+  ownerPhone  String?
+  ownerAlerts Boolean @default(true)
 
   orders    OrderRecord[]
   templates Template[]
@@ -175,6 +194,16 @@ model OrderRecord {
   /// The review request's button needs it, and by the time that goes out
   /// Shopify's payload is long gone.
   handle  String?
+
+  /// Why we cancelled it - "paid_online" when the customer paid for the
+  /// same items through the Pay Now link, "customer" from WhatsApp. Null
+  /// when the merchant cancelled it in Shopify. paid_online sends no
+  /// cancellation message: the customer just paid, nothing was cancelled
+  /// from where they stand.
+  cancelReason String?
+  /// The corrected address or number the customer sent on WhatsApp, kept
+  /// here until the merchant has passed it on to the courier.
+  changeNote   String?
 }
 
 
@@ -348,12 +377,18 @@ model InboundMessage {
   text        String
   /// text | button | interactive | image | ...
   kind        String
-  /// confirm | cancel | stop | start | none
+  /// confirm | cancel | stop | start | address | phone | help | track
+  /// | address_given | phone_given | help_given | none
   intent      String @default("none")
 
   createdAt DateTime @default(now())
 
   @@index([shopId, createdAt])
+
+  /// What the app answered, if anything.
+  reply     String?
+  /// Whether the merchant was told about it on their own WhatsApp.
+  forwarded Boolean @default(false)
 }
 
 

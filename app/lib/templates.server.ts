@@ -14,12 +14,12 @@ export type Vars = {
   order: string;     // Z1001
   item: string;      // Portable Blender + 1 more item
   amount: string;    // INR 899
-  eta: string;       // 3-7 September
+  eta: string;       // 14 September
   courier: string;   // Delhivery
   tracking: string;  // 1234567890
   city: string;      // Patna
   address: string;   // Bettiah, Bihar 845438
-  reason: string;    // Customer not reachable
+  reason: string;    // your phone could not be reached
   attempts: string;  // three
   date: string;      // 27 August, 3:45 PM
   method: string;    // UPI
@@ -31,6 +31,12 @@ export type Vars = {
 type Def = {
   template: string;
   params: (v: Vars) => string[];
+  /**
+   * The values in the order the template had before September 2026, when
+   * the customer's name was still its {{1}}. Kept until every template has
+   * been re-approved without it; see altParams in whatsapp.server.ts.
+   */
+  old?: (v: Vars) => string[];
   /** the trailing part of the dynamic URL button */
   button?: (v: Vars) => string;
   marketing?: boolean;
@@ -40,24 +46,28 @@ export const EVENTS: Record<string, Def> = {
   order_created:    { template: "order_placed",      params: v => [v.name, v.order, v.item, v.amount, v.eta] },
   cod_confirm:      { template: "cod_confirm",       params: v => [v.name, v.order, v.item, v.amount] },
   cod_reminder:     { template: "cod_reminder",      params: v => [v.name, v.order, v.item, v.amount] },
-  cod_confirmed:    { template: "cod_confirmed",     params: v => [v.name, v.order, v.item, v.eta] },
+  cod_confirmed:    { template: "cod_confirmed",     params: v => [v.order, v.item, v.eta],                        old: v => [v.name, v.order, v.item, v.eta] },
   order_paid:       { template: "payment_received",  params: v => [v.name, v.amount, v.order, v.item, v.eta] },
 
-  shipped:          { template: "order_shipped",     params: v => [v.name, v.order, v.item, v.courier, v.tracking, v.eta], button: v => v.tracking },
-  in_transit:       { template: "order_in_transit",  params: v => [v.name, v.order, v.city, v.item, v.eta],               button: v => v.tracking },
-  out_for_delivery: { template: "out_for_delivery",  params: v => [v.name, v.order, v.item, v.address, v.amount],         button: v => v.tracking },
-  delivery_failed:  { template: "delivery_failed",   params: v => [v.name, v.order, v.item, v.reason] },
-  rto_alert:        { template: "rto_alert",         params: v => [v.name, v.order, v.attempts, v.item] },
-  delivered:        { template: "order_delivered",   params: v => [v.name, v.order, v.item, v.date] },
+  shipped:          { template: "order_shipped",     params: v => [v.order, v.item, v.courier, v.tracking, v.eta], old: v => [v.name, v.order, v.item, v.courier, v.tracking, v.eta], button: v => v.tracking },
+  in_transit:       { template: "order_in_transit",  params: v => [v.order, v.city, v.item, v.eta],               old: v => [v.name, v.order, v.city, v.item, v.eta],               button: v => v.tracking },
+  out_for_delivery: { template: "out_for_delivery",  params: v => [v.order, v.item, v.address, v.amount],         old: v => [v.name, v.order, v.item, v.address, v.amount],         button: v => v.tracking },
+  delivery_failed:  { template: "delivery_failed",   params: v => [v.order, v.item, v.reason],                    old: v => [v.name, v.order, v.item, cap(v.reason)] },
+  rto_alert:        { template: "rto_alert",         params: v => [v.order, v.attempts, v.item],                  old: v => [v.name, v.order, v.attempts, v.item] },
+  delivered:        { template: "order_delivered",   params: v => [v.order, v.item, v.date],                      old: v => [v.name, v.order, v.item, v.date] },
 
-  cancelled:        { template: "order_cancelled",   params: v => [v.name, v.order, v.item, v.amount] },
-  refunded:         { template: "refund_initiated",  params: v => [v.name, v.amount, v.order, v.item, v.method] },
+  cancelled:        { template: "order_cancelled",   params: v => [v.order, v.item, v.amount],                    old: v => [v.name, v.order, v.item, v.amount] },
+  refunded:         { template: "refund_initiated",  params: v => [v.amount, v.order, v.item],                    old: v => [v.name, v.amount, v.order, v.item, v.method] },
 
   abandoned_1:      { template: "abandoned_cart_1",  params: v => [v.name, v.item, v.amount], button: v => v.cart, marketing: true },
-  abandoned_2:      { template: "abandoned_cart_2",  params: v => [v.name, v.item, v.code],   button: v => v.cart, marketing: true },
+  abandoned_2:      { template: "abandoned_cart_2",  params: v => [v.item, v.code],           old: v => [v.name, v.item, v.code], button: v => v.cart, marketing: true },
   review:           { template: "review_request",    params: v => [v.name, v.item],           button: v => v.handle, marketing: true },
   back_in_stock:    { template: "back_in_stock",     params: v => [v.name, v.item, v.amount], button: v => v.handle, marketing: true },
 };
+
+/** "nobody was available" -> "Nobody was available": the previous wording of
+ *  delivery_failed prints the reason after "Reason:", where it starts a line. */
+const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
 /** Empty Vars, so that every field is present everywhere. */
 export function blankVars(): Vars {
@@ -170,38 +180,50 @@ function num(amount?: string | null): string | null {
   });
 }
 
-/**
- * The delivery estimate - something like "3-7 September".
- *
- * This is an estimate, not a promise. Per the shipping policy it is 2 to 6
- * working days after dispatch. We skip Sundays, because couriers skip them too.
- */
-export function etaRange(from = new Date(), minDays = 2, maxDays = 6): string {
-  const add = (d: Date, work: number) => {
-    const out = new Date(d);
-    let left = work;
-    while (left > 0) {
-      out.setDate(out.getDate() + 1);
-      if (out.getDay() !== 0) left--;   // Sundays do not count
-    }
-    return out;
-  };
-  const a = add(from, minDays);
-  const b = add(from, maxDays);
-  const M = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const M = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 
-  if (a.getMonth() === b.getMonth()) return `${a.getDate()}-${b.getDate()} ${M[a.getMonth()]}`;
-  return `${a.getDate()} ${M[a.getMonth()]} - ${b.getDate()} ${M[b.getMonth()]}`;
+/**
+ * A moment in time as the clock in India shows it. The server runs on UTC,
+ * so 8 PM in Bihar is a different calendar day there - the customer must
+ * read the day and hour they live in.
+ */
+function ist(d: Date) {
+  const p: Record<string, string> = {};
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric", month: "numeric", day: "numeric",
+    hour: "numeric", minute: "2-digit", hour12: true,
+  }).formatToParts(d);
+  for (const x of parts) p[x.type] = x.value;
+  return {
+    y: Number(p.year), m: Number(p.month), d: Number(p.day),
+    h: Number(p.hour), min: p.minute, ap: String(p.dayPeriod ?? "").toUpperCase(),
+  };
 }
 
-/** "27 August, 3:45 PM" - for the delivered message. */
+/**
+ * The delivery date - one day, like "14 September".
+ *
+ * Seven working days after the order is placed, four after it is handed to
+ * the courier. Sundays do not count, because couriers skip them too. It is
+ * a single date rather than a range: a customer plans around "by the
+ * 14th", nobody plans around "between the 10th and the 14th".
+ */
+export function etaDate(from = new Date(), workingDays = 7): string {
+  const t = ist(from);
+  const out = new Date(Date.UTC(t.y, t.m - 1, t.d, 12));
+  let left = workingDays;
+  while (left > 0) {
+    out.setUTCDate(out.getUTCDate() + 1);
+    if (out.getUTCDay() !== 0) left--;
+  }
+  return `${out.getUTCDate()} ${M[out.getUTCMonth()]}`;
+}
+
+/** "27 August, 3:45 PM" - for the delivered message, in India's clock. */
 export function stamp(d = new Date()): string {
-  const M = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-  let h = d.getHours();
-  const ap = h >= 12 ? "PM" : "AM";
-  h = h % 12 || 12;
-  const m = String(d.getMinutes()).padStart(2, "0");
-  return `${d.getDate()} ${M[d.getMonth()]}, ${h}:${m} ${ap}`;
+  const t = ist(d);
+  return `${t.d} ${M[t.m - 1]}, ${t.h}:${t.min} ${t.ap}`;
 }
 
 /** A short one-line shipping address - "Bettiah, Bihar 845438". */

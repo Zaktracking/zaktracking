@@ -11,11 +11,12 @@
 
 import db from "../db.server";
 import { queueMessage, eventEnabled } from "./notify.server";
-import { blankVars, money, amountVar } from "./templates.server";
+import { blankVars, amountVar } from "./templates.server";
+import { confirmCod } from "./inbound.server";
 
 const HOUR = 60 * 60 * 1000;
 
-/** How long we wait for an answer before nudging once. */
+/** How long we wait for an answer before nudging once, unless the shop says otherwise. */
 const COD_QUIET_HOURS = 6;
 /** After this we stop chasing - the order is stale, not undecided. */
 const COD_GIVE_UP_HOURS = 48;
@@ -33,30 +34,7 @@ const REVIEW_GIVE_UP_DAYS = 14;
 export async function sweepCodReminders(shop: any): Promise<number> {
   if (!eventEnabled(shop, "cod_reminder")) return 0;
 
-  const now = Date.now();
-  const asked = await db.messageLog.findMany({
-    where: {
-      shopId: shop.id,
-      event: "cod_confirm",
-      status: "sent",
-      sentAt: {
-        lte: new Date(now - COD_QUIET_HOURS * HOUR),
-        gte: new Date(now - COD_GIVE_UP_HOURS * HOUR),
-      },
-      orderId: { not: null },
-    },
-    take: 100,
-  });
-  if (!asked.length) return 0;
-
-  const orders = await db.orderRecord.findMany({
-    where: {
-      id: { in: asked.map((m: any) => m.orderId as string) },
-      codConfirmed: null,
-      cancelledAt: null,
-      cancelRequestedAt: null,
-    },
-  });
+  const orders = await unanswered(shop, quietHours(shop) * HOUR);
 
   let sent = 0;
   for (const o of orders) {
@@ -76,6 +54,71 @@ export async function sweepCodReminders(shop: any): Promise<number> {
     if (row) sent++;
   }
   return sent;
+}
+
+function quietHours(shop: any): number {
+  const h = Number(shop?.codReminderHours);
+  return Number.isFinite(h) && h > 0 ? h : COD_QUIET_HOURS;
+}
+
+/**
+ * The COD orders that were asked to confirm at least `after` ms ago and
+ * have said nothing since: not confirmed, not declined, not cancelled, not
+ * waiting on a cancellation. Only orders that actually received the ask
+ * count, and nothing older than the give-up line.
+ */
+async function unanswered(shop: any, after: number) {
+  const now = Date.now();
+  const asked = await db.messageLog.findMany({
+    where: {
+      shopId: shop.id,
+      event: "cod_confirm",
+      status: "sent",
+      sentAt: {
+        lte: new Date(now - after),
+        gte: new Date(now - COD_GIVE_UP_HOURS * HOUR),
+      },
+      orderId: { not: null },
+    },
+    take: 100,
+  });
+  if (!asked.length) return [];
+
+  return db.orderRecord.findMany({
+    where: {
+      id: { in: asked.map((m: any) => m.orderId as string) },
+      isCod: true,
+      codConfirmed: null,
+      cancelledAt: null,
+      cancelRequestedAt: null,
+    },
+  });
+}
+
+/**
+ * Still nothing after the reminder: the order is taken as confirmed.
+ *
+ * Most people who do not answer still want the parcel - they saw the
+ * message and had nothing to add. Cancelling them was losing real orders;
+ * shipping them loses only the few who would have refused at the door,
+ * and those had two messages and a Cancel button to say so. The wait is
+ * counted from the ask: the reminder's hours, then the minutes set on the
+ * shop - so a reminder that failed to send cannot leave an order in limbo.
+ * No Pay Now offer here: nobody wrote to us, so the window for it is shut.
+ */
+export async function sweepCodAutoConfirm(shop: any): Promise<number> {
+  if (!shop.codConfirm || !shop.autoConfirm || !eventEnabled(shop, "cod_confirm")) return 0;
+
+  const wait = Math.max(1, Number(shop.autoConfirmMin) || 30) * 60 * 1000;
+  const orders = await unanswered(shop, quietHours(shop) * HOUR + wait);
+
+  let done = 0;
+  for (const o of orders) {
+    await confirmCod(shop, o, shop.domain, "silence");
+    console.log(`[cod-auto] ${o.orderNumber} confirmed after no reply`);
+    done++;
+  }
+  return done;
 }
 
 /**

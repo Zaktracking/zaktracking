@@ -222,16 +222,32 @@ export const STATUS_LABEL: Record<string, string> = {
 };
 
 /**
- * The reason a delivery failed, in plain language. Sending the customer
- * "DeliveryFailure_NoBody" is useless.
+ * The reason a delivery failed, in plain language, written to follow the
+ * template's "could not be delivered today because ...". Sending the
+ * customer "DeliveryFailure_NoBody" is useless, and the courier's own
+ * words ("Consignee unavailable") are not much better - so the code and
+ * the description are both read, and one of a few plain phrases comes out.
  */
 export function failReason(sub: string, desc: string): string {
-  if (/NoBody/i.test(sub)) return "Nobody was available at the address";
-  if (/InvalidAddress/i.test(sub)) return "The address could not be located";
-  if (/Rejected/i.test(sub)) return "The parcel was refused at the door";
-  if (/Security/i.test(sub)) return "The courier could not get access";
-  if (/Delayed/i.test(sub)) return "The parcel is delayed in transit";
-  return desc || "The courier could not complete the delivery";
+  const s = `${sub ?? ""} ${desc ?? ""}`.toLowerCase();
+
+  if (/nobody|no body|unavailable|not available|no one|nobody at|not at home|absent|not present/.test(s))
+    return "nobody was available at the address";
+  if (/not reachable|unreachable|no response|not responding|not answering|switched off|ringing|phone not|not contact|unable to contact|could not contact|not picking|no answer/.test(s))
+    return "your phone could not be reached";
+  if (/invalidaddress|invalid address|incomplete|incorrect address|wrong address|not found|not located|unable to locate|locate|landmark|insufficient/.test(s))
+    return "the address was incomplete";
+  if (/closed|shut|security|no entry|not allowed|restricted|no access/.test(s))
+    return "the address was closed";
+  if (/rejected|refused|refuse|declin|reject|not accept/.test(s))
+    return "the parcel was refused at the door";
+  if (/cod|cash|amount|payment|money/.test(s))
+    return "the cash amount was not ready";
+  if (/out of delivery area|out of area|\boda\b|route|not serviceable|non.serviceable|beyond|remote area/.test(s))
+    return "the area was off the courier's route today";
+  if (/delay/.test(s))
+    return "the parcel was delayed in transit";
+  return "the courier could not complete the attempt";
 }
 
 export function inWords(n: number): string {

@@ -93,6 +93,7 @@ export async function deliver(
     to,
     template: def.template,
     params: def.params(vars),
+    altParams: def.old ? def.old(vars) : null,
     buttonParam: def.button ? def.button(vars) : null,
   });
 
@@ -118,9 +119,12 @@ export async function deliver(
 export function eventEnabled(shop: any, event: string): boolean {
   const map: Record<string, string> = {
     order_created: "onOrderCreate",
-    cod_confirm: "codConfirm",
-    cod_reminder: "codConfirm",
-    cod_confirmed: "codConfirm",
+    // codConfirm is the whole COD flow's master switch; each of its three
+    // messages has a switch of its own besides, so the ask, the reminder
+    // and the confirmation can be turned off one at a time.
+    cod_confirm: "onCodConfirm",
+    cod_reminder: "onCodReminder",
+    cod_confirmed: "onCodConfirmed",
     order_paid: "onOrderPaid",
     shipped: "onFulfilled",
     in_transit: "onInTransit",
@@ -134,7 +138,9 @@ export function eventEnabled(shop: any, event: string): boolean {
     abandoned_2: "onAbandoned",
   };
   const key = map[event];
-  return key ? Boolean(shop[key]) : true;
+  if (!key) return true;
+  if (key.startsWith("onCod") && !shop.codConfirm) return false;
+  return Boolean(shop[key]);
 }
 
 /**

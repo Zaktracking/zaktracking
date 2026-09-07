@@ -66,6 +66,43 @@ export async function tagOrder(
   }
 }
 
+/**
+ * Adds a line to the order's note - the corrected address a customer sent
+ * on WhatsApp, say - where it is read on the order page itself. The note
+ * is one field, so the existing text is read first and kept.
+ */
+export async function noteOrder(domain: string, shopifyOrderId: string, line: string) {
+  const id = orderGid(shopifyOrderId);
+  try {
+    const cur = await call(
+      domain,
+      `#graphql
+       query zakOrderNote($id: ID!) { order(id: $id) { note } }`,
+      { id },
+    );
+    const before = String(cur?.data?.order?.note ?? "").trim();
+    const note = (before ? before + "\n" : "") + line;
+
+    const res = await call(
+      domain,
+      `#graphql
+       mutation zakOrderNote($input: OrderInput!) {
+         orderUpdate(input: $input) { userErrors { message } }
+       }`,
+      { input: { id, note: note.slice(0, 5000) } },
+    );
+    const errs = res?.data?.orderUpdate?.userErrors ?? [];
+    if (errs.length) {
+      console.log(`[orders] note refused on ${shopifyOrderId}: ${errs.map((e: any) => e.message).join("; ")}`);
+      return { ok: false as const };
+    }
+    return { ok: true as const };
+  } catch (e: any) {
+    console.log(`[orders] could not note ${shopifyOrderId}: ${e?.message ?? e}`);
+    return { ok: false as const };
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /*  Current state                                                      */
 /* ------------------------------------------------------------------ */

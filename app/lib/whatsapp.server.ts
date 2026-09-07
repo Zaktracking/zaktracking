@@ -26,6 +26,16 @@ export async function sendTemplate(opts: {
   template: string;
   /** for the body's {{1}} {{2}} ... in this same order */
   params: string[];
+  /**
+   * The same values in the template's previous numbering, if it has one.
+   *
+   * A template is edited in WhatsApp Manager and approved hours later; the
+   * app is deployed at some third moment. Between those moments the body
+   * may still be the old one. Given both orders, the send matches whichever
+   * the template really has, so the customer never gets a garbled message
+   * and nothing is refused for a wrong count.
+   */
+  altParams?: string[] | null;
   /** the trailing part of the dynamic URL button, if the template has one */
   buttonParam?: string | null;
   /** force a language code; normally leave this out and let it be resolved */
@@ -48,6 +58,9 @@ export async function sendTemplate(opts: {
   //  to invent, so we refuse rather than send "{{4}}" to a customer.
   // ---------------------------------------------------------------
   let params = [...opts.params];
+  // The other numbering, kept aside for the retry below.
+  let other: string[] | null =
+    opts.altParams && opts.altParams.length !== opts.params.length ? [...opts.altParams] : null;
   let buttonParam = opts.buttonParam ?? null;
   let buttonIndex = 0;
   let specLanguage: string | null = null;
@@ -57,6 +70,11 @@ export async function sendTemplate(opts: {
 
     if (spec) {
       specLanguage = spec.language;
+
+      if (other && spec.bodyVars === other.length && spec.bodyVars !== params.length) {
+        console.log(`[whatsapp] ${opts.template} still has its previous ${other.length} body variables - using that order`);
+        [params, other] = [other, params];
+      }
 
       if (spec.bodyVars < params.length) {
         console.log(
@@ -93,22 +111,25 @@ export async function sendTemplate(opts: {
     }
   }
 
-  const components: any[] = [];
+  function build(list: string[]): any[] {
+    const components: any[] = [];
 
-  if (params.length) {
-    components.push({
-      type: "body",
-      parameters: params.map((t) => ({ type: "text", text: t || "-" })),
-    });
-  }
+    if (list.length) {
+      components.push({
+        type: "body",
+        parameters: list.map((t) => ({ type: "text", text: t || "-" })),
+      });
+    }
 
-  if (buttonParam) {
-    components.push({
-      type: "button",
-      sub_type: "url",
-      index: String(buttonIndex),
-      parameters: [{ type: "text", text: buttonParam }],
-    });
+    if (buttonParam) {
+      components.push({
+        type: "button",
+        sub_type: "url",
+        index: String(buttonIndex),
+        parameters: [{ type: "text", text: buttonParam }],
+      });
+    }
+    return components;
   }
 
   // ---------------------------------------------------------------
@@ -140,13 +161,20 @@ export async function sendTemplate(opts: {
   let last: SendResult = { ok: false, error: "no language to try", permanent: true };
 
   for (const lang of tries) {
-    last = await attempt(lang);
+    last = await attempt(lang, params);
+    // 132000 is a body whose variable count is not the one we read - an
+    // edit still in review, or one approved a moment ago - so the other
+    // numbering is tried once before giving up.
+    if (!last.ok && last.error.startsWith("[132000]") && other) {
+      console.log(`[whatsapp] ${opts.template} refused ${params.length} variables - retrying with ${other.length}`);
+      last = await attempt(lang, other);
+    }
     // 132001 is the only error worth retrying with a different language.
     if (last.ok || !last.error.startsWith("[132001]")) return last;
   }
   return last;
 
-  async function attempt(lang: string): Promise<SendResult> {
+  async function attempt(lang: string, list: string[]): Promise<SendResult> {
   const body = {
     messaging_product: "whatsapp",
     recipient_type: "individual",
@@ -155,7 +183,7 @@ export async function sendTemplate(opts: {
     template: {
       name: opts.template,
       language: { code: lang },
-      components,
+      components: build(list),
     },
   };
 
@@ -215,19 +243,95 @@ export async function sendText(opts: {
   to: string;
   body: string;
 }): Promise<SendResult> {
+  return post(opts.phoneNumberId, opts.token, {
+    to: opts.to,
+    type: "text",
+    text: { preview_url: false, body: opts.body.slice(0, 4096) },
+  });
+}
+
+/**
+ * Text with up to three reply buttons under it - "Confirm order",
+ * "Cancel order" - the same buttons a template can carry, but composed on
+ * the spot. Only inside the 24-hour window, like every other free-form
+ * message. A tap comes back to the webhook as the button's title.
+ */
+export async function sendButtons(opts: {
+  phoneNumberId: string;
+  token: string;
+  to: string;
+  body: string;
+  buttons: string[];
+}): Promise<SendResult> {
+  return post(opts.phoneNumberId, opts.token, {
+    to: opts.to,
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: opts.body.slice(0, 1024) },
+      action: {
+        buttons: opts.buttons.slice(0, 3).map((title, i) => ({
+          type: "reply",
+          reply: { id: `b${i + 1}`, title: title.slice(0, 20) },
+        })),
+      },
+    },
+  });
+}
+
+/**
+ * Text with a menu behind one button - the customer taps it, picks a row,
+ * and the row's title comes back to the webhook exactly like a typed reply.
+ * Up to ten rows; Meta caps the row title at 24 characters and the
+ * description at 72.
+ */
+export async function sendList(opts: {
+  phoneNumberId: string;
+  token: string;
+  to: string;
+  body: string;
+  button: string;
+  rows: { title: string; description?: string }[];
+}): Promise<SendResult> {
+  return post(opts.phoneNumberId, opts.token, {
+    to: opts.to,
+    type: "interactive",
+    interactive: {
+      type: "list",
+      body: { text: opts.body.slice(0, 1024) },
+      action: {
+        button: opts.button.slice(0, 20),
+        sections: [
+          {
+            rows: opts.rows.slice(0, 10).map((r, i) => ({
+              id: `r${i + 1}`,
+              title: r.title.slice(0, 24),
+              ...(r.description ? { description: r.description.slice(0, 72) } : {}),
+            })),
+          },
+        ],
+      },
+    },
+  });
+}
+
+/** One call to the messages endpoint for anything that is not a template. */
+async function post(
+  phoneNumberId: string,
+  token: string,
+  message: Record<string, unknown>,
+): Promise<SendResult> {
   try {
-    const res = await fetch(`${GRAPH}/${opts.phoneNumberId}/messages`, {
+    const res = await fetch(`${GRAPH}/${phoneNumberId}/messages`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${opts.token}`,
+        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
         messaging_product: "whatsapp",
         recipient_type: "individual",
-        to: opts.to,
-        type: "text",
-        text: { preview_url: false, body: opts.body },
+        ...message,
       }),
     });
 
@@ -264,40 +368,18 @@ export async function sendCta(opts: {
   label: string;
   url: string;
 }): Promise<SendResult> {
-  try {
-    const res = await fetch(`${GRAPH}/${opts.phoneNumberId}/messages`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${opts.token}`,
-        "Content-Type": "application/json",
+  return post(opts.phoneNumberId, opts.token, {
+    to: opts.to,
+    type: "interactive",
+    interactive: {
+      type: "cta_url",
+      body: { text: opts.body.slice(0, 1024) },
+      action: {
+        name: "cta_url",
+        parameters: { display_text: opts.label.slice(0, 20), url: opts.url },
       },
-      body: JSON.stringify({
-        messaging_product: "whatsapp",
-        recipient_type: "individual",
-        to: opts.to,
-        type: "interactive",
-        interactive: {
-          type: "cta_url",
-          body: { text: opts.body.slice(0, 1024) },
-          action: {
-            name: "cta_url",
-            parameters: { display_text: opts.label.slice(0, 20), url: opts.url },
-          },
-        },
-      }),
-    });
-
-    const json: any = await res.json().catch(() => ({}));
-    if (res.ok && json?.messages?.[0]?.id) return { ok: true, id: json.messages[0].id };
-
-    const err = json?.error ?? {};
-    const code = Number(err.code ?? 0);
-    const msg = err.message || `HTTP ${res.status}`;
-    const permanent = [100, 131009, 131026, 131047, 131051].includes(code);
-    return { ok: false, error: `[${code}] ${msg}`, permanent };
-  } catch (e: any) {
-    return { ok: false, error: String(e?.message ?? e), permanent: false };
-  }
+    },
+  });
 }
 
 /* ------------------------------------------------------------------ */

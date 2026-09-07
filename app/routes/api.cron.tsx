@@ -7,7 +7,7 @@ import {
 import { applyToShipment, FINAL } from "../lib/tracksync.server";
 import { sweepAbandoned } from "../lib/abandoned.server";
 import { sweepCancelRequests } from "../lib/inbound.server";
-import { sweepCodReminders, sweepReviewRequests } from "../lib/followups.server";
+import { sweepCodReminders, sweepCodAutoConfirm, sweepReviewRequests } from "../lib/followups.server";
 
 /**
  * The clock job.
@@ -38,6 +38,7 @@ async function run() {
     abandoned1: 0,
     abandoned2: 0,
     codReminders: 0,
+    codAutoConfirmed: 0,
     reviews: 0,
     cancelled: 0,
     cancelTooLate: 0,
@@ -165,6 +166,7 @@ async function run() {
      nudge needs nothing from the courier. */
   for (const shop of await db.shop.findMany()) {
     out.codReminders += await sweepCodReminders(shop);
+    out.codAutoConfirmed += await sweepCodAutoConfirm(shop);
     out.reviews += await sweepReviewRequests(shop);
   }
 

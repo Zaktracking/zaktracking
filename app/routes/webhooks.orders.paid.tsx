@@ -2,7 +2,7 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { firstDelivery, ensureShop, upsertOrder } from "../lib/webhook.server";
 import { queueMessage, eventEnabled } from "../lib/notify.server";
-import { blankVars, itemLine, money, amountVar, etaRange, orderTotal } from "../lib/templates.server";
+import { blankVars, itemLine, amountVar, etaDate, orderTotal } from "../lib/templates.server";
 import { replacedOrderNumber } from "../lib/paynow.server";
 import { cancelOrder } from "../lib/orders.server";
 import db from "../db.server";
@@ -29,6 +29,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       where: { shopId: s.id, orderNumber: replaces, cancelledAt: null },
     });
     if (old) {
+      // The reason is written before the cancel, so that orders/cancelled -
+      // which fires the moment Shopify acts - finds it and stays quiet.
+      await db.orderRecord.update({
+        where: { id: old.id },
+        data: { cancelReason: "paid_online" },
+      });
       const done = await cancelOrder(
         shop,
         old.shopifyId,
@@ -38,6 +44,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         await db.orderRecord.update({
           where: { id: old.id },
           data: { cancelledAt: new Date() },
+        });
+      } else {
+        await db.orderRecord.update({
+          where: { id: old.id },
+          data: { cancelReason: null },
         });
       }
       console.log(
@@ -73,7 +84,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   v.order = rec.orderNumber;
   v.item = itemLine(order);
   v.amount = amountVar(orderTotal(order), order.currency);
-  v.eta = etaRange();
+  v.eta = etaDate(new Date(), 7);
 
   await queueMessage({
     shopId: s.id,

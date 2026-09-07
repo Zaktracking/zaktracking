@@ -1,7 +1,7 @@
 import db from "../db.server";
 import { normalize, failReason, inWords, type Norm } from "./track.server";
 import { queueMessage, eventEnabled } from "./notify.server";
-import { blankVars, amountVar, stamp, etaRange } from "./templates.server";
+import { blankVars, amountVar, stamp, etaDate } from "./templates.server";
 
 /**
  * What to do when a courier scan arrives.
@@ -74,7 +74,9 @@ export async function applyToShipment(shipmentId: string, node: any) {
   v.tracking = sh.trackingNo || "";
   v.city = n.location || rec.city || "your city";
   v.address = rec.address || n.location || "your address";
-  v.eta = etaRange();
+  // "arriving by 12 September": four working days from the hand-over,
+  // the same date the shipped message promised.
+  v.eta = etaDate(sh.createdAt ?? new Date(), 4);
   v.date = stamp(n.time ?? new Date());
   v.reason = failReason(n.sub, n.desc);
   v.attempts = inWords(Math.max(n.attempts, 1));
