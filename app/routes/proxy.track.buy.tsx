@@ -6,9 +6,11 @@
  * more than paying online. Neither is possible inside Shopify's checkout on
  * this plan.
  *
- * What is deliberately NOT here: taking money. Choosing "Pay online" hands
- * the shopper to Shopify's own checkout with the discount already applied.
- * Every rupee still moves the way it does today.
+ * Paying online: with the shop's Razorpay keys in, the popup opens
+ * Razorpay's checkout right where it is, and the paid order is written by
+ * this app the moment the money is confirmed - see prepaid.server.ts.
+ * Without the keys, "Pay online" hands the shopper to Shopify's own
+ * checkout with the discount already applied, as it always did.
  */
 
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
@@ -19,6 +21,8 @@ import { toE164 } from "../lib/webhook.server";
 import { isVerified } from "../lib/otp.server";
 import { variantInfo, createCodOrder, discountValue } from "../lib/order-create.server";
 import { prepaidDeal } from "../lib/paynow.server";
+import { rzpReady } from "../lib/razorpay.server";
+import { startPayment, confirmPayment, paymentStatus } from "../lib/prepaid.server";
 
 /** gid or bare number, both accepted from the link. */
 function toVariantGid(raw: string): string | null {
@@ -151,6 +155,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       // the single-item tier
       off: deal.off / 2,
       code: deal.code,
+      // whether Pay online happens inside the popup, through Razorpay
+      pay: rzpReady(shop),
     };
 
     const askedFor = url.searchParams.get("v");
@@ -392,7 +398,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 /* ------------------------------------------------------------------ */
-/*  POST - place the Cash on Delivery order                            */
+/*  POST - place the order: COD straight away, prepaid via Razorpay    */
 /* ------------------------------------------------------------------ */
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -408,6 +414,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   const d = (await request.json().catch(() => ({}))) as any;
+  const intent = String(d.intent ?? "place");
+
+  /* The browser is back from Razorpay with a signed receipt, or is asking
+     whether its payment has turned into an order yet. */
+  if (intent === "paid") {
+    const r = await confirmPayment(shop, String(d.order ?? ""), String(d.payment ?? ""), String(d.signature ?? ""));
+    return Response.json(r);
+  }
+  if (intent === "status") {
+    return Response.json(await paymentStatus(shop, String(d.order ?? "")));
+  }
 
   /* One product from a product page, or the whole cart. Both arrive here. */
   const raw: any[] = Array.isArray(d.items)
@@ -439,6 +456,27 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return Response.json({ ok: false, reason: "Please confirm your mobile number first" });
   }
 
+  const buyer = {
+    items,
+    firstName: String(d.firstName).trim().slice(0, 60),
+    lastName: String(d.lastName ?? "").trim().slice(0, 60),
+    phone,
+    email: String(d.email ?? "").trim().slice(0, 120) || null,
+    address1: String(d.address1).trim().slice(0, 200),
+    city: String(d.city).trim().slice(0, 60),
+    province,
+    zip,
+  };
+
+  /* Pay online: nothing is written yet. Razorpay is opened for the exact
+     amount, and the order follows once the money is confirmed. */
+  if (intent === "pay") {
+    const coupon = d.discountCode
+      ? { code: String(d.discountCode), claimed: Number(d.discountAmount) || 0 }
+      : null;
+    return Response.json(await startPayment(domain, shop, buyer, coupon));
+  }
+
   // Whatever the cart was carrying, checked against the real code.
   let discount = null;
   if (d.discountCode) {
@@ -452,16 +490,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   const res = await createCodOrder(domain, {
-    items,
+    ...buyer,
     discount,
-    firstName: String(d.firstName).trim().slice(0, 60),
-    lastName: String(d.lastName ?? "").trim().slice(0, 60),
-    phone,
-    email: String(d.email ?? "").trim().slice(0, 120) || null,
-    address1: String(d.address1).trim().slice(0, 200),
-    city: String(d.city).trim().slice(0, 60),
-    province,
-    zip,
     note: "Placed on the store's own order form, phone verified by a one-time code",
   });
 

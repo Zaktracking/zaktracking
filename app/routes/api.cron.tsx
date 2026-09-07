@@ -8,6 +8,7 @@ import { applyToShipment, FINAL } from "../lib/tracksync.server";
 import { sweepAbandoned } from "../lib/abandoned.server";
 import { sweepCancelRequests } from "../lib/inbound.server";
 import { sweepCodReminders, sweepCodAutoConfirm, sweepReviewRequests } from "../lib/followups.server";
+import { sweepPayments } from "../lib/prepaid.server";
 
 /**
  * The clock job.
@@ -42,6 +43,7 @@ async function run() {
     reviews: 0,
     cancelled: 0,
     cancelTooLate: 0,
+    paidOrders: 0,
     notes: [] as string[],
   };
 
@@ -151,6 +153,15 @@ async function run() {
   const ab = await sweepAbandoned();
   out.abandoned1 = ab.sent1;
   out.abandoned2 = ab.sent2;
+
+  /* ---------- 3b. online payments the browser never confirmed ----------
+     A phone that dropped its connection the second after paying never told
+     us. Razorpay is asked; a payment that went through gets its order. */
+  try {
+    out.paidOrders = (await sweepPayments()).ordered;
+  } catch (e: any) {
+    out.notes.push(`payments: ${e?.message ?? e}`);
+  }
 
   /* ---------- 4. cancellations the customer asked for ----------
      Pressing Cancel on WhatsApp does not cancel anything at once. A

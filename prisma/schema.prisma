@@ -139,6 +139,45 @@ model Shop {
   /// Discount code for the second abandoned-cart reminder.
   /// If it is empty the second reminder is not sent at all - better than a fake code.
   abandonCode String?
+
+  // --- Razorpay, for paying online inside the popup ---
+  /// With both keys in, "Pay online" charges through Razorpay right there
+  /// in the popup and ends on the app's own confirmation screen. Without
+  /// them the popup hands over to Shopify's checkout, as it always did.
+  rzpKeyId     String?
+  rzpKeySecret String?
+
+  payments Payment[]
+}
+
+/// One "Pay online" attempt: the Razorpay order it opened, and everything
+/// the Shopify order will be made of. Written before the customer pays, so
+/// the order can still be created if the browser never comes back - the
+/// cron reads Razorpay for the money and finishes the job.
+model Payment {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  /// Razorpay's order id, order_xxx - what the checkout was opened with.
+  rzpOrder   String  @unique
+  rzpPayment String?
+  /// In paise, exactly what Razorpay was told to collect.
+  amount     Int
+  /// The order's makings, as JSON: items, address, phone, discount.
+  input      String
+  /// pending -> creating -> ordered. "failed" when Shopify refused the
+  /// order after the money came in; the cron tries again.
+  status     String  @default("pending")
+  orderName  String?
+  orderId    String?
+  error      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([shopId, createdAt])
+  @@index([status, updatedAt])
 }
 
 

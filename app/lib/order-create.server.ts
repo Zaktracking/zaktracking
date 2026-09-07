@@ -1,9 +1,11 @@
 /**
- * Creating a Cash on Delivery order from our own form.
+ * Creating an order from our own form.
  *
- * Only COD comes through here. Prepaid never does - that goes to Shopify's
- * own checkout, where Shopify and the payment provider handle the money
- * exactly as they do today. Nothing in this file touches a rupee.
+ * Two kinds come through here. A Cash on Delivery order, written with
+ * nothing paid - that is what COD means. And, when the shop has its
+ * Razorpay keys in, a prepaid order written only after Razorpay has taken
+ * the money, with that payment recorded on it so Shopify shows it paid.
+ * Nothing in this file moves a rupee itself; see razorpay.server.ts.
  */
 
 import { unauthenticated } from "../shopify.server";
@@ -141,12 +143,8 @@ export async function discountValue(
   }
 }
 
-/**
- * Writes the order. Financial status stays PENDING because no money has
- * moved - that is exactly what Cash on Delivery means, and it is what makes
- * the rest of the app treat it as COD.
- */
-export async function createCodOrder(domain: string, b: BuyerInput) {
+/** The parts of an order that are the same whichever way it is paid. */
+function orderInput(b: BuyerInput) {
   // Shopify wants the plus sign; WhatsApp does not, and toE164 is shared
   // with it. So the sign goes back on here rather than there.
   const e164 = b.phone.charAt(0) === "+" ? b.phone : "+" + b.phone.replace(/\D/g, "");
@@ -154,8 +152,6 @@ export async function createCodOrder(domain: string, b: BuyerInput) {
   const order: any = {
     email: b.email || null,
     phone: e164,
-    financialStatus: "PENDING",
-    tags: "Cash on Delivery, zaktracking-form, otp-verified",
     note: b.note || null,
     customAttributes: [{ key: "Phone verified", value: "Yes, by a one-time code" }],
     lineItems: b.items.map((l) => ({
@@ -185,6 +181,58 @@ export async function createCodOrder(domain: string, b: BuyerInput) {
     };
   }
 
+  return order;
+}
+
+/**
+ * Writes the order. Financial status stays PENDING because no money has
+ * moved - that is exactly what Cash on Delivery means, and it is what makes
+ * the rest of the app treat it as COD.
+ */
+export async function createCodOrder(domain: string, b: BuyerInput) {
+  const order = orderInput(b);
+  order.financialStatus = "PENDING";
+  order.tags = "Cash on Delivery, zaktracking-form, otp-verified";
+  return writeOrder(domain, order);
+}
+
+/** What Razorpay collected, so the order is written as paid. */
+export type Paid = {
+  amount: number;      // rupees, e.g. 869 or 1794.5
+  paymentId: string;   // pay_xxx
+  rzpOrder: string;    // order_xxx
+  method?: string;     // upi, card, netbanking
+};
+
+/**
+ * Writes a prepaid order, with the Razorpay payment on it as a completed
+ * sale. Shopify then shows it paid, fires orders/paid, and the customer
+ * gets the "payment received" message exactly as they do when the money
+ * came through Shopify's own checkout.
+ */
+export async function createPaidOrder(domain: string, b: BuyerInput, paid: Paid) {
+  const order = orderInput(b);
+  order.financialStatus = "PAID";
+  order.tags = ["Prepaid", "Razorpay", "zaktracking-form", "otp-verified"];
+  order.customAttributes.push({ key: "Razorpay payment", value: paid.paymentId });
+  order.transactions = [
+    {
+      kind: "SALE",
+      status: "SUCCESS",
+      gateway: "Razorpay",
+      amountSet: { shopMoney: { amount: paid.amount.toFixed(2), currencyCode: "INR" } },
+      authorizationCode: paid.paymentId,
+      receiptJson: {
+        razorpay_payment_id: paid.paymentId,
+        razorpay_order_id: paid.rzpOrder,
+        method: paid.method || null,
+      },
+    },
+  ];
+  return writeOrder(domain, order);
+}
+
+async function writeOrder(domain: string, order: any) {
   try {
     const json = await call(
       domain,

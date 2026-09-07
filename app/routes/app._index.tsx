@@ -119,6 +119,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     waToken: mask(shop.waToken),
     smsApiKey: mask(shop.smsApiKey),
     trackApiKey: mask(shop.trackApiKey),
+    rzpKeySecret: mask(shop.rzpKeySecret),
   };
 
   return {
@@ -143,7 +144,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent.startsWith("remove:")) {
     const key = intent.slice(7);
-    const allowed: Record<string, string> = { waToken: "WhatsApp token", smsApiKey: "Fast2SMS key", trackApiKey: "17TRACK key" };
+    const allowed: Record<string, string> = {
+      waToken: "WhatsApp token", smsApiKey: "Fast2SMS key", trackApiKey: "17TRACK key",
+      rzpKeySecret: "Razorpay key secret",
+    };
     if (!allowed[key]) return { ok: false, msg: "Could not understand that request" };
     await db.shop.update({ where: { id: shop.id }, data: { [key]: null } });
     console.log(`[admin] removed ${key}`);
@@ -175,6 +179,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         smsRoute: str("smsRoute"),
         formEnabled: on("formEnabled"),
         prepaidCode: str("prepaidCode"),
+        rzpKeyId: str("rzpKeyId"),
+        rzpKeySecret: str("rzpKeySecret") ?? shop.rzpKeySecret,
         waEnabled: on("waEnabled"),
         onOrderCreate: on("onOrderCreate"),
         codConfirm: on("codConfirm"),
@@ -563,6 +569,19 @@ export default function Index() {
             placeholder="PREPAID35"
             help="Paying online saves ₹30 on a single item (code PREPAID30, built in) and ₹20 on each item when there are more - this code must take exactly ₹20 off every item in Shopify. The order form, the popup and the Pay Now message all promise these figures." />
 
+          <h3 style={{ ...S.h2, fontSize: 15, marginTop: 18 }}>Razorpay, for paying inside the popup</h3>
+          <p style={{ ...S.help, marginBottom: 12 }}>
+            With both keys in, Pay online opens Razorpay right inside the popup and ends on the app's own
+            "order confirmed" screen - no Shopify checkout, no email asked for. Leave them empty and Pay online
+            goes to Shopify's checkout as before. Razorpay Dashboard → Account &amp; Settings → API Keys.
+          </p>
+          <Text label="Razorpay key ID" name="rzpKeyId"
+            defaultValue={shop.rzpKeyId ?? ""}
+            placeholder="rzp_live_XXXXXXXXXXXXXX"
+            help="Starts with rzp_live_ (or rzp_test_ for a trial run with test cards)." />
+          <Secret label="Razorpay key secret" name="rzpKeySecret" masked={shop.rzpKeySecret}
+            help="Shown once by Razorpay when the key is made. Never leaves this server." />
+
           <hr style={{ border: 0, borderTop: "1px solid #e3e3e3", margin: "18px 0" }} />
           <h2 style={S.h2}>Your own WhatsApp</h2>
 
@@ -593,7 +612,8 @@ export default function Index() {
             <b>{shop.waWabaId ?? "not set"}</b>, token{" "}
             <b>{shop.waToken || "not set"}</b>, 17TRACK key{" "}
             <b>{shop.trackApiKey || "not set"}</b>, sending{" "}
-            <b>{shop.waEnabled ? "on" : "off"}</b>.
+            <b>{shop.waEnabled ? "on" : "off"}</b>, Razorpay in the popup{" "}
+            <b>{shop.rzpKeyId && shop.rzpKeySecret ? "on" : "off"}</b>.
           </p>
         </Form>
       </div>
