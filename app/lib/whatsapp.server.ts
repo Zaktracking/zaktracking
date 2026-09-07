@@ -57,10 +57,14 @@ export async function sendTemplate(opts: {
   //  correctly. Too few is the opposite case: there is nothing sensible
   //  to invent, so we refuse rather than send "{{4}}" to a customer.
   // ---------------------------------------------------------------
-  let params = [...opts.params];
+  // Meta prints a parameter exactly as it is given. A stray space in a
+  // value shows up as a gap in the customer's message ("Thanks  Rahul"),
+  // so every value is squeezed to single spaces first.
+  const tidy = (x: string) => String(x ?? "").replace(/\s+/g, " ").trim();
+  let params = opts.params.map(tidy);
   // The other numbering, kept aside for the retry below.
   let other: string[] | null =
-    opts.altParams && opts.altParams.length !== opts.params.length ? [...opts.altParams] : null;
+    opts.altParams && opts.altParams.length !== opts.params.length ? opts.altParams.map(tidy) : null;
   let buttonParam = opts.buttonParam ?? null;
   let buttonIndex = 0;
   let specLanguage: string | null = null;

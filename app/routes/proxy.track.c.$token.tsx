@@ -33,10 +33,22 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     where: { shopId_token: { shopId: shop.id, token } },
   });
 
-  // The link has expired or the order already went through - better to
-  // open the shop than to send the customer to an empty cart.
-  const to = cart?.recoverUrl || `https://${domain}/collections/all`;
+  // First choice is Shopify's own recovery URL - it reopens the checkout
+  // with the address already typed in. But Shopify leaves that empty on
+  // plenty of checkouts, and the customer was landing on the shop front
+  // wondering where their cart went. So second choice is a cart permalink
+  // built from the variant ids we wrote down: /cart/<id>:<qty>,... puts
+  // the same items back and goes straight to the cart.
+  //
+  // The shop front is only for a cart so old that we kept no lines at all.
+  const to =
+    cart?.recoverUrl ||
+    (cart?.cartItems
+      ? `https://${domain}/cart/${cart.cartItems}`
+      : `https://${domain}/collections/all`);
 
-  console.log(`[cart-link] ${token} -> ${cart?.recoverUrl ? "recovery" : "shop"}`);
+  console.log(
+    `[cart-link] ${token} -> ${cart?.recoverUrl ? "recovery" : cart?.cartItems ? "permalink" : "shop"}`,
+  );
   return new Response(null, { status: 302, headers: { Location: to } });
 };

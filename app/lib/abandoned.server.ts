@@ -41,7 +41,8 @@ export async function sweepAbandoned() {
     for (const c of first) {
       const v = blankVars();
       v.name = c.name || "there";
-      v.item = c.itemCount > 1 ? `${c.itemCount} items` : "your item";
+      // Rows saved before the name was stored still fall back to a count.
+      v.item = c.itemLine || (c.itemCount > 1 ? `${c.itemCount} items` : "your item");
       v.amount = amountVar(c.total, c.currency);
       v.cart = c.token;
 
@@ -83,7 +84,8 @@ export async function sweepAbandoned() {
       }
       const v = blankVars();
       v.name = c.name || "there";
-      v.item = c.itemCount > 1 ? `${c.itemCount} items` : "your item";
+      // Rows saved before the name was stored still fall back to a count.
+      v.item = c.itemLine || (c.itemCount > 1 ? `${c.itemCount} items` : "your item");
       v.amount = amountVar(c.total, c.currency);
       v.code = code;
       v.cart = c.token;

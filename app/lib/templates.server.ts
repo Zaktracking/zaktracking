@@ -87,10 +87,56 @@ export function blankVars(): Vars {
 const HELPER_LINE = /partial\s*payment|cod\s*(fee|charge|advance)|shipping\s*protection|insurance/i;
 
 /**
+ * A shop title cut down to the one or two words that actually name the thing.
+ *
+ * "Kids Portable LCD Writing Tablet for Drawing, Erasable Pad"
+ *   -> "Writing Tablet"
+ *
+ * Never ends in dots. A trimmed name with three dots on the end reads like
+ * the message itself broke, and on WhatsApp the customer only needs enough
+ * to recognise what they bought.
+ *
+ * How: cut at the first separator (dash, comma, "for", "with", "and"),
+ * drop a trailing size or wattage, then keep the last two words - in
+ * English shop titles the head noun sits at the end ("Writing Tablet",
+ * "Bag Sealer"). If those two words are too thin to mean anything
+ * ("2 in"), three are kept instead.
+ */
+function shortTitle(raw: any): string {
+  let t = String(raw ?? "").trim();
+  if (!t) return "";
+
+  t = t.split(
+    /\s+[-\u2013\u2014|/]\s+|[,;]|\s*\(|\s+for\s+|\s+with\s+|\s+and\s+|\s*&\s*|\s+by\s+/i,
+  )[0].trim();
+
+  const SPEC = /^[\d.]+\s*(ml|l|g|kg|w|v|mm|cm|m|inch|in|pcs?|pack|pc|x)?$/i;
+  const JOIN = /^(of|the|a|an|in|on|at|to|by|for|with|&)$/i;
+
+  let words = t.split(/\s+/).filter(Boolean);
+
+  // "Car Vacuum Cleaner 120W High Power" - whatever follows the first
+  // measurement is sales copy, not the name.
+  const spec = words.findIndex((w, i) => i > 0 && SPEC.test(w));
+  if (spec > 1) words = words.slice(0, spec);
+
+  while (words.length > 2 && (SPEC.test(words[words.length - 1]) || JOIN.test(words[words.length - 1]))) {
+    words.pop();
+  }
+
+  if (words.length <= 2) return words.join(" ");
+  const two = words.slice(-2);
+  const thin =
+    two.some((w) => w.replace(/[^A-Za-z0-9]/g, "").length < 2) ||
+    two.join("").replace(/[^A-Za-z0-9]/g, "").length < 5;
+  return (thin ? words.slice(-3) : two).join(" ");
+}
+
+/**
  * The order's item names on a single line.
  *   one item       -> "Portable Blender"
  *   more than one  -> "Portable Blender + 2 more items"
- * Long names get truncated, otherwise they break badly on WhatsApp.
+ * The name is shortened to a word or two - see shortTitle.
  */
 export function itemLine(order: any): string {
   let li: any[] = order?.line_items ?? [];
@@ -108,8 +154,7 @@ export function itemLine(order: any): string {
 
   if (real.length) li = real;
 
-  let first = String(li[0].title ?? li[0].name ?? "your order").trim();
-  if (first.length > 46) first = first.slice(0, 45).trimEnd() + "…";
+  const first = shortTitle(li[0].title ?? li[0].name) || "your order";
 
   const rest = li.length - 1;
   if (rest <= 0) return first;
