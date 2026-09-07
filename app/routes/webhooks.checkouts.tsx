@@ -20,6 +20,21 @@ import { itemLine } from "../lib/templates.server";
  * no reminder goes out. Otherwise someone who just bought would also get
  * "your cart is waiting", which is the worst possible experience.
  */
+/**
+ * "44445555:1,66667777:2" - exactly what /cart/<this> needs to put the
+ * same items back. Written down now because the reminder goes out hours
+ * later, and Shopify does not always give us a recovery URL to use.
+ */
+function cartItems(c: any): string | null {
+  const parts: string[] = [];
+  for (const l of c?.line_items ?? []) {
+    const id = String(l?.variant_id ?? "");
+    const q = Number(l?.quantity ?? 1);
+    if (/^\d+$/.test(id) && Number.isFinite(q) && q > 0) parts.push(`${id}:${q}`);
+  }
+  return parts.length ? parts.join(",") : null;
+}
+
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { shop, topic, payload } = await authenticate.webhook(request);
 
@@ -51,6 +66,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     // The names, not just how many. The reminder goes out hours later,
     // when Shopify's payload is long gone, so it is written down now.
     itemLine: itemLine(c),
+    // And what was in it, so the link still works when Shopify gives us
+    // no recovery URL of its own.
+    cartItems: cartItems(c),
     lastSeenAt: new Date(),
   };
 
