@@ -313,10 +313,6 @@ model AbandonedCart {
   /// use. Without it the reminder could only say "your item", because a
   /// cart row held a count and no names at all.
   itemLine   String?
-  /// "44445555:1,66667777:2" - the variant id and quantity of every line.
-  /// Shopify leaves abandoned_checkout_url empty on some checkouts, and
-  /// without these the reminder link had nowhere to go but the shop front.
-  cartItems  String?
 
   lastSeenAt  DateTime  @default(now())
   reminder1At DateTime?
