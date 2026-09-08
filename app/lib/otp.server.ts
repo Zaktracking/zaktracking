@@ -132,6 +132,24 @@ export async function requestOtp(shopId: string, phone: string): Promise<OtpResu
     };
   }
 
+  // One tap, one code.
+  //
+  // The button can be pressed twice, and a browser will sometimes send the
+  // same request again by itself. Each of those used to mint a fresh code
+  // and kill the one before it - so the customer read the first code off
+  // their screen and the app had already thrown it away. Worse with
+  // Message Central in front: their second answer is "a request already
+  // exists", we fell through to WhatsApp, and the two channels then held
+  // two different codes. A code sent seconds ago is still the good one.
+  const live = await db.otpCode.findFirst({
+    where: { shopId, phone, verifiedAt: null, expiresAt: { gt: new Date() } },
+    orderBy: { sentAt: "desc" },
+  });
+  if (live && Date.now() - new Date(live.sentAt).getTime() < 45_000) {
+    console.log(`[otp] ${phone} was sent a code seconds ago - that one still stands`);
+    return { ok: true };
+  }
+
   // randomInt is the cryptographic one. Math.random is guessable, and a
   // guessable code is no check at all.
   const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
@@ -153,6 +171,8 @@ export async function requestOtp(shopId: string, phone: string): Promise<OtpResu
   let delivered = false;
   let lastError = "";
   let usedChannel = "";
+  /** Message Central still holds a live code for this number. */
+  let stillLive = false;
   /** Message Central's verificationId, when the SMS went through them. */
   let smsRef: string | null = null;
 
@@ -200,6 +220,10 @@ export async function requestOtp(shopId: string, phone: string): Promise<OtpResu
     if (mcConfigured()) {
       const m = await mcSend(phone);
       if (m.ok) { usedChannel = "sms"; smsRef = m.ref; return true; }
+      // Their code is already out there. Nothing more is sent - not by SMS,
+      // not by WhatsApp - or the customer would end up holding two codes
+      // and reading the wrong one.
+      if (m.already) { stillLive = true; return true; }
       lastError = m.error;
       console.log(`[otp] sms failed for ${phone}: ${lastError}`);
       await note("sms", "failed", lastError);
@@ -238,6 +262,13 @@ export async function requestOtp(shopId: string, phone: string): Promise<OtpResu
       ok: false,
       reason: "Could not send the code right now. Please try again in a minute.",
     };
+  }
+
+  // Nothing new went out, so nothing is written down: the row for the code
+  // the customer is holding stays exactly as it is, still checkable.
+  if (stillLive) {
+    console.log(`[otp] ${phone}: the code already sent is still live - none sent`);
+    return { ok: true };
   }
 
   await note(usedChannel || channel, "sent", null);

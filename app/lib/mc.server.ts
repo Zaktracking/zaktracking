@@ -68,7 +68,7 @@ async function token(): Promise<string | null> {
  *  API would otherwise be free to pick a channel of its own. */
 export async function mcSend(
   phone: string,
-): Promise<{ ok: true; ref: string } | { ok: false; error: string }> {
+): Promise<{ ok: true; ref: string } | { ok: false; already?: boolean; error: string }> {
   const to = toTen(phone);
   if (!to) return { ok: false, error: "Not an Indian mobile number" };
 
@@ -91,7 +91,15 @@ export async function mcSend(
     const ref = j?.data?.verificationId;
     if (res.ok && ref) return { ok: true, ref: String(ref) };
     if (res.status === 401) cached = null;
-    return { ok: false, error: String(j?.message ?? `HTTP ${res.status}`) };
+
+    const why = String(j?.message ?? j?.data?.errorMessage ?? `HTTP ${res.status}`);
+    // REQUEST_ALREADY_EXISTS is not a failure. It means they still hold a
+    // live code for this number - the customer has it in their hand. The
+    // caller must not send a different one down another channel: Message
+    // Central makes the code and never shows it to us, so the SMS the
+    // customer can actually see would then be the one we refuse.
+    if (/ALREADY_EXISTS/i.test(why)) return { ok: false, already: true, error: why };
+    return { ok: false, error: why };
   } catch (e: any) {
     return { ok: false, error: String(e?.message ?? e) };
   }
