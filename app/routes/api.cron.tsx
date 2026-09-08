@@ -7,6 +7,7 @@ import {
 import { applyToShipment, FINAL } from "../lib/tracksync.server";
 import { sweepAbandoned } from "../lib/abandoned.server";
 import { sweepQueued } from "../lib/notify.server";
+import { sweepRefunds } from "../lib/refund.server";
 import { sweepCancelRequests } from "../lib/inbound.server";
 import { sweepCodReminders, sweepCodAutoConfirm, sweepReviewRequests } from "../lib/followups.server";
 import { sweepPayments } from "../lib/prepaid.server";
@@ -46,6 +47,7 @@ async function run() {
     cancelTooLate: 0,
     paidOrders: 0,
     retried: 0,
+    refunded: 0,
     notes: [] as string[],
   };
 
@@ -192,6 +194,16 @@ async function run() {
     out.retried = await sweepQueued();
   } catch (e: any) {
     out.notes.push(`retry sweep: ${e?.message ?? e}`);
+  }
+
+  /* ---------- 7. refunds on their way back ----------
+     Razorpay takes a few days to actually move the money. Every refund
+     still in flight is asked about here, and the customer is told the
+     moment it has gone - not when Shopify wrote the note. */
+  try {
+    out.refunded = await sweepRefunds();
+  } catch (e: any) {
+    out.notes.push(`refund sweep: ${e?.message ?? e}`);
   }
 
   console.log("[cron]", JSON.stringify(out));

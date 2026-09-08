@@ -173,11 +173,21 @@ model Payment {
   orderId    String?
   error      String?
 
+  /// Razorpay's own refund, rfnd_xxx, once the money has been sent back.
+  /// Written the moment it exists, so a webhook delivered twice can never
+  /// refund twice.
+  refundId     String?
+  /// pending -> processed, as Razorpay reports it. The customer is told
+  /// only at "processed", when the money has actually left.
+  refundStatus String?
+  refundedAt   DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([shopId, createdAt])
   @@index([status, updatedAt])
+  @@index([refundStatus])
 }
 
 

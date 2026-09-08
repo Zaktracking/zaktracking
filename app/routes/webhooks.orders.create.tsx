@@ -26,12 +26,30 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   v.amount = amountVar(orderTotal(order), order.currency);
   v.eta = etaDate(new Date(), 7);
 
-  // A prepaid order says nothing here: orders/paid follows within seconds
-  // and its "payment received" is the confirmation - one message, not two
-  // that say the same thing. For COD we ask for confirmation, which cuts
-  // RTO (the parcel coming back) the most; with the ask switched off, a
-  // plain "order placed" goes instead.
-  if (!rec.isCod) return new Response();
+  // A prepaid order that came through Shopify's checkout says nothing here:
+  // orders/paid follows within seconds and its "payment received" is the
+  // confirmation - one message, not two that say the same thing.
+  //
+  // But an order this app writes itself is born already paid. There is no
+  // payment event for Shopify to announce, so orders/paid never fires and
+  // that confirmation was never sent - the customer paid and heard nothing.
+  // So when the order arrives already settled, it is said here. If
+  // orders/paid does turn up as well, MessageLog's unique(order, event)
+  // turns the second one away.
+  if (!rec.isCod) {
+    const settled = String(order?.financial_status ?? "").toLowerCase() === "paid";
+    const owed = Number(order?.total_outstanding ?? 0);
+    if (settled && !(Number.isFinite(owed) && owed > 0) && eventEnabled(s, "order_paid")) {
+      await queueMessage({
+        shopId: s.id,
+        orderId: rec.id,
+        event: "order_paid",
+        to: rec.phone,
+        vars: v,
+      });
+    }
+    return new Response();
+  }
   const event = eventEnabled(s, "cod_confirm") ? "cod_confirm" : "order_created";
 
   if (eventEnabled(s, event)) {

@@ -12,6 +12,14 @@
  *     browser can never change what is charged)
  *   - prove a payment is real (the signature Razorpay hands the browser)
  *   - read a payment or an order back, for the cron's second look
+ *   - send the money back, and watch until it has actually gone
+ *
+ * That last one matters more than it looks. When an order the app wrote is
+ * cancelled in Shopify, Shopify marks it refunded - but it cannot move the
+ * money, because the payment was never taken through Shopify's own gateway.
+ * It sits with Razorpay until someone refunds it there. So the app asks
+ * Razorpay itself, and only tells the customer once Razorpay says the money
+ * has left.
  */
 
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -121,4 +129,61 @@ export async function ensureCaptured(shop: any, p: RzpPayment, paise: number): P
     currency: "INR",
   });
   return shape(c);
+}
+
+export type RzpRefund = {
+  id: string;
+  paymentId: string;
+  amount: number;   // paise
+  /// pending - Razorpay has it and is sending it on
+  /// processed - the money has left Razorpay
+  /// failed - it did not go; the merchant has to look
+  status: string;
+  speed: string;
+};
+
+function shapeRefund(r: any): RzpRefund {
+  return {
+    id: String(r?.id ?? ""),
+    paymentId: String(r?.payment_id ?? ""),
+    amount: Number(r?.amount) || 0,
+    status: String(r?.status ?? ""),
+    speed: String(r?.speed_processed ?? r?.speed_requested ?? ""),
+  };
+}
+
+/**
+ * Sends money back for one payment.
+ *
+ * "normal" speed, not "optimum": optimum costs the merchant a fee for the
+ * privilege of the money landing in minutes instead of days. The customer
+ * has already been told three to five working days.
+ */
+export async function createRefund(
+  shop: any,
+  paymentId: string,
+  paise: number,
+  notes: Record<string, string>,
+): Promise<RzpRefund> {
+  const r = await call(shop, `/payments/${encodeURIComponent(paymentId)}/refund`, {
+    amount: Math.round(paise),
+    speed: "normal",
+    notes,
+  });
+  if (!r?.id) throw new Error("Razorpay did not return a refund");
+  return shapeRefund(r);
+}
+
+/** One refund, as Razorpay sees it now. */
+export async function fetchRefund(shop: any, refundId: string): Promise<RzpRefund> {
+  return shapeRefund(await call(shop, `/refunds/${encodeURIComponent(refundId)}`));
+}
+
+/**
+ * Every refund already made against a payment. Asked before making a new
+ * one, so a webhook that arrives twice cannot send the money twice.
+ */
+export async function refundsOf(shop: any, paymentId: string): Promise<RzpRefund[]> {
+  const j = await call(shop, `/payments/${encodeURIComponent(paymentId)}/refunds`);
+  return (j?.items ?? []).map(shapeRefund);
 }
