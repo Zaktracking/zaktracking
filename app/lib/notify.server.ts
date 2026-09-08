@@ -95,6 +95,7 @@ export async function deliver(
     params: def.params(vars),
     altParams: def.old ? def.old(vars) : null,
     buttonParam: def.button ? def.button(vars) : null,
+    couponParam: def.coupon ? def.coupon(vars) : null,
   });
 
   if (res.ok) {

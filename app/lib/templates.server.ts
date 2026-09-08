@@ -39,6 +39,12 @@ type Def = {
   old?: (v: Vars) => string[];
   /** the trailing part of the dynamic URL button */
   button?: (v: Vars) => string;
+  /**
+   * The code behind a copy-code button. Meta refuses the whole message if
+   * the template carries one of those buttons and no coupon travels with
+   * it, so a template with a "copy the code" button needs this filled in.
+   */
+  coupon?: (v: Vars) => string;
   marketing?: boolean;
 };
 
@@ -60,7 +66,7 @@ export const EVENTS: Record<string, Def> = {
   refunded:         { template: "refund_initiated",  params: v => [v.amount, v.order, v.item],                    old: v => [v.name, v.amount, v.order, v.item, v.method] },
 
   abandoned_1:      { template: "abandoned_cart_1",  params: v => [v.name, v.item, v.amount], button: v => v.cart, marketing: true },
-  abandoned_2:      { template: "abandoned_cart_2",  params: v => [v.item, v.code],           old: v => [v.name, v.item, v.code], button: v => v.cart, marketing: true },
+  abandoned_2:      { template: "abandoned_cart_2",  params: v => [v.item, v.code],           old: v => [v.name, v.item, v.code], button: v => v.cart, coupon: v => v.code, marketing: true },
   review:           { template: "review_request",    params: v => [v.name, v.item],           button: v => v.handle, marketing: true },
   back_in_stock:    { template: "back_in_stock",     params: v => [v.name, v.item, v.amount], button: v => v.handle, marketing: true },
 };

@@ -32,13 +32,25 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   let paid = 0;
   let via = "";
   for (const t of refund.transactions ?? []) {
-    if (t?.status && t.status !== "success") continue;
+    // A gateway refund is born "pending" and only turns "success" a moment
+    // later, once the bank has taken it - and refunds/create is fired once
+    // and never again. Waiting here for settled money therefore meant the
+    // message was never sent at all: the refund the customer was told about
+    // by email arrived in no WhatsApp of ours. The template is named
+    // refund_initiated and says three to five working days in its own
+    // words, so pending is exactly the moment it was written for. Only a
+    // refund that actually failed is passed over.
+    const st = String(t?.status ?? "").toLowerCase();
+    if (st && st !== "success" && st !== "pending") continue;
     const n = Number(t?.amount);
     if (Number.isFinite(n)) paid += n;
     if (!via && t?.gateway) via = String(t.gateway);
   }
+  // No refund transaction at all means no money is moving - an order that
+  // was never actually paid, cancelled to tidy the list. Saying "refunded"
+  // there would frighten someone who was never charged.
   if (paid <= 0) {
-    console.log(`[refunds] ${rec.orderNumber}: nothing settled yet, no message`);
+    console.log(`[refunds] ${rec.orderNumber}: no money is going back, no message`);
     return new Response();
   }
 

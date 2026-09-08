@@ -38,6 +38,8 @@ export async function sendTemplate(opts: {
   altParams?: string[] | null;
   /** the trailing part of the dynamic URL button, if the template has one */
   buttonParam?: string | null;
+  /** the code behind a copy-code button, if the template has one */
+  couponParam?: string | null;
   /** force a language code; normally leave this out and let it be resolved */
   language?: string;
   /** lets us look up the template's real language before sending */
@@ -67,6 +69,8 @@ export async function sendTemplate(opts: {
     opts.altParams && opts.altParams.length !== opts.params.length ? opts.altParams.map(tidy) : null;
   let buttonParam = opts.buttonParam ?? null;
   let buttonIndex = 0;
+  let couponParam = opts.couponParam ?? null;
+  let couponIndex = 0;
   let specLanguage: string | null = null;
 
   if (opts.wabaId && !opts.language) {
@@ -112,6 +116,26 @@ export async function sendTemplate(opts: {
           permanent: true,
         };
       }
+
+      // A copy-code button is the same trap once more, and the costliest
+      // one: Meta throws the whole message away with 131008 when a template
+      // carries one and no coupon_code is sent with it. That is what
+      // silently killed every second abandoned-cart reminder - the message
+      // that carries the discount, so the one worth the most.
+      if (!spec.copyVar && couponParam) {
+        console.log(`[whatsapp] ${opts.template} has no copy-code button - dropping its coupon`);
+        couponParam = null;
+      } else if (spec.copyVar) {
+        couponIndex = spec.copyIndex;
+      }
+
+      if (spec.copyVar && !couponParam) {
+        return {
+          ok: false,
+          error: `[params] ${opts.template} has a copy-code button but no coupon for it - not sent`,
+          permanent: true,
+        };
+      }
     }
   }
 
@@ -131,6 +155,15 @@ export async function sendTemplate(opts: {
         sub_type: "url",
         index: String(buttonIndex),
         parameters: [{ type: "text", text: buttonParam }],
+      });
+    }
+
+    if (couponParam) {
+      components.push({
+        type: "button",
+        sub_type: "copy_code",
+        index: String(couponIndex),
+        parameters: [{ type: "coupon_code", coupon_code: couponParam }],
       });
     }
     return components;
@@ -422,7 +455,8 @@ export async function findTemplate(wabaId: string, token: string, name: string) 
 
 /**
  * What a template actually needs before it can be sent: how many body
- * variables, and whether its URL button carries one.
+ * variables, whether its URL button carries one, and whether it ends in a
+ * copy-code button that wants the discount code handed to it.
  *
  * Getting this wrong is its own error (132000, wrong number of parameters),
  * so it is worth reading rather than assuming. hello_world, for instance,
@@ -438,6 +472,10 @@ export async function templateSpec(wabaId: string, token: string, name: string) 
   // buttons - Pay Now and Track order, say - and the parameter has to be
   // addressed to the right one or it lands in the wrong link.
   let urlIndex = 0;
+  // The same for a copy-code button, which sits at its own place in the
+  // row - second, under the link, in the abandoned-cart reminder.
+  let copyVar = false;
+  let copyIndex = 0;
 
   for (const c of t.components ?? []) {
     const type = String(c?.type ?? "").toUpperCase();
@@ -455,6 +493,10 @@ export async function templateSpec(wabaId: string, token: string, name: string) 
           if (!urlVar) urlIndex = i;
           urlVar = true;
         }
+        if (String(b?.type ?? "").toUpperCase() === "COPY_CODE") {
+          if (!copyVar) copyIndex = i;
+          copyVar = true;
+        }
       }
     }
   }
@@ -466,6 +508,8 @@ export async function templateSpec(wabaId: string, token: string, name: string) 
     bodyVars,
     urlVar,
     urlIndex,
+    copyVar,
+    copyIndex,
   };
 }
 
