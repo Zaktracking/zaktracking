@@ -50,6 +50,7 @@ export async function queueMessage(opts: {
         event: opts.event,
         to: opts.to,
         body: preview(opts.event, opts.vars),
+        vars: JSON.stringify(opts.vars),
         status: "queued",
       },
     });
@@ -101,7 +102,14 @@ export async function deliver(
   if (res.ok) {
     await db.messageLog.update({
       where: { id: logId },
-      data: { status: "sent", providerId: res.id, sentAt: new Date(), error: null },
+      data: {
+        status: "sent",
+        providerId: res.id,
+        sentAt: new Date(),
+        error: null,
+        attempts: { increment: 1 },
+        nextTryAt: null,
+      },
     });
     console.log(`[notify] sent ${event} -> ${to}`);
     return;
@@ -109,11 +117,106 @@ export async function deliver(
 
   // No point retrying a permanent error - the number is wrong, or the
   // template does not exist, or the customer has blocked us.
+  if (res.permanent) {
+    await db.messageLog.update({
+      where: { id: logId },
+      data: { status: "failed", error: res.error, attempts: { increment: 1 }, nextTryAt: null },
+    });
+    console.log(`[notify] FAILED ${event} -> ${to}: ${res.error}`);
+    return;
+  }
+
+  // Everything else passes: Meta having a bad minute, this host waking up,
+  // the network. Those are worth another go - which until now nothing ever
+  // gave them. The row said "queued", the log said "retry later", and no
+  // part of the app ever came back for it.
+  const row = await db.messageLog.findUnique({ where: { id: logId } });
+  const attempts = (row?.attempts ?? 0) + 1;
+  const gap = BACKOFF_MIN[attempts - 1];
+  const age = Date.now() - (row?.createdAt ?? new Date()).getTime();
+
+  // Out of tries, or so old that arriving would be worse than staying
+  // away - a cart reminder eight hours late is not a reminder.
+  if (gap == null || age + gap * 60_000 > retryWindowMs(event)) {
+    await db.messageLog.update({
+      where: { id: logId },
+      data: {
+        status: "failed",
+        error: `${res.error} - given up after ${attempts}`,
+        attempts,
+        nextTryAt: null,
+      },
+    });
+    console.log(`[notify] gave up on ${event} -> ${to} after ${attempts}: ${res.error}`);
+    return;
+  }
+
   await db.messageLog.update({
     where: { id: logId },
-    data: { status: res.permanent ? "failed" : "queued", error: res.error },
+    data: { status: "queued", error: res.error, attempts, nextTryAt: new Date(Date.now() + gap * 60_000) },
   });
-  console.log(`[notify] ${res.permanent ? "FAILED" : "retry later"} ${event} -> ${to}: ${res.error}`);
+  console.log(`[notify] ${event} -> ${to} failed (${res.error}) - again in ${gap} min`);
+}
+
+/**
+ * Growing gaps between tries, in minutes. Five goes over about nine hours:
+ * long enough to sit out anything short, short enough that a message still
+ * arrives while it means something. Running out of this list is the end.
+ */
+const BACKOFF_MIN = [5, 15, 45, 120, 360];
+
+/**
+ * How long a message is worth chasing, counted from when it was made.
+ *
+ * A cart reminder is a moment - it belongs to the hour the cart was left,
+ * and one that turns up the next morning is litter. An order confirmation
+ * or a refund is worth having whenever it lands.
+ */
+function retryWindowMs(event: string): number {
+  return event.startsWith("abandoned_") ? 3 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+}
+
+/**
+ * The messages that failed for a passing reason and are due another go.
+ *
+ * The clock job calls this. Nothing used to, which is how four cart
+ * reminders sat in the queue for two days without a soul noticing.
+ */
+export async function sweepQueued(limit = 50): Promise<number> {
+  let due;
+  try {
+    due = await db.messageLog.findMany({
+      where: { status: "queued", nextTryAt: { not: null, lte: new Date() } },
+      orderBy: { nextTryAt: "asc" },
+      take: limit,
+    });
+  } catch (e: any) {
+    console.log(`[notify] could not read the retry queue: ${e?.message ?? e}`);
+    return 0;
+  }
+
+  let sent = 0;
+  for (const row of due) {
+    let vars: Vars;
+    try {
+      vars = JSON.parse(row.vars ?? "");
+    } catch {
+      // Written before this column existed, so there is nothing to send
+      // from. Close it rather than read it again every ten minutes.
+      await db.messageLog.update({
+        where: { id: row.id },
+        data: { status: "failed", error: "no saved values to send again from", nextTryAt: null },
+      });
+      continue;
+    }
+
+    await deliver(row.id, row.shopId, row.event, row.to, vars);
+    const after = await db.messageLog.findUnique({ where: { id: row.id } });
+    if (after?.status === "sent") sent++;
+  }
+
+  if (due.length) console.log(`[notify] retried ${due.length}, ${sent} went`);
+  return sent;
 }
 
 /** Whether the merchant has kept this event switched ON. */

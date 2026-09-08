@@ -6,6 +6,7 @@ import {
 } from "../lib/track.server";
 import { applyToShipment, FINAL } from "../lib/tracksync.server";
 import { sweepAbandoned } from "../lib/abandoned.server";
+import { sweepQueued } from "../lib/notify.server";
 import { sweepCancelRequests } from "../lib/inbound.server";
 import { sweepCodReminders, sweepCodAutoConfirm, sweepReviewRequests } from "../lib/followups.server";
 import { sweepPayments } from "../lib/prepaid.server";
@@ -44,6 +45,7 @@ async function run() {
     cancelled: 0,
     cancelTooLate: 0,
     paidOrders: 0,
+    retried: 0,
     notes: [] as string[],
   };
 
@@ -179,6 +181,17 @@ async function run() {
     out.codReminders += await sweepCodReminders(shop);
     out.codAutoConfirmed += await sweepCodAutoConfirm(shop);
     out.reviews += await sweepReviewRequests(shop);
+  }
+
+  /* ---------- 6. messages that failed for a passing reason ----------
+     A send that fails on the network, or on Meta having a bad minute, used
+     to be marked "queued" and left there - nothing in the app ever came
+     back for it. Now it is given a handful of tries with growing gaps, and
+     dropped once it is too old to be worth arriving. */
+  try {
+    out.retried = await sweepQueued();
+  } catch (e: any) {
+    out.notes.push(`retry sweep: ${e?.message ?? e}`);
   }
 
   console.log("[cron]", JSON.stringify(out));

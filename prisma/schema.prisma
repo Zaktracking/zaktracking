@@ -307,12 +307,22 @@ model MessageLog {
   providerId String?
   error      String?
 
+  /// The values the template was filled with, so a failed send can be
+  /// tried again later without rebuilding them from the order.
+  vars String?
+  /// How many times it has been handed to WhatsApp.
+  attempts Int @default(0)
+  /// When the next go is due. Null means nobody is waiting on it: it was
+  /// sent, it was given up on, or WhatsApp is not set up yet.
+  nextTryAt DateTime?
+
   sentAt    DateTime?
   createdAt DateTime  @default(now())
 
   @@unique([orderId, event, channel])
   @@index([shopId, createdAt])
   @@index([status])
+  @@index([nextTryAt])
 }
 
 
