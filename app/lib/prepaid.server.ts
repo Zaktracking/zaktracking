@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Paying online inside the popup, start to finish.
  *
  *   1. start    - the popup says what is being bought and where it goes.
@@ -25,6 +25,7 @@ import {
   type BuyerInput, type BuyerLine,
 } from "./order-create.server";
 import { prepaidDeal } from "./paynow.server";
+import { sendMetaPurchase } from "./meta.server";
 import {
   rzpReady, createRzpOrder, fetchPayment, paymentsOf, ensureCaptured, signatureOk,
   type RzpPayment,
@@ -183,6 +184,15 @@ export async function finishPayment(shop: any, pay: any, p: RzpPayment) {
     where: { id: pay.id },
     data: { status: "ordered", orderName: res.name, orderId: res.id },
   });
+
+  void sendMetaPurchase({
+    value: pay.amount / 100,
+    currency: "INR",
+    eventId: p.id,
+    phone: input.phone,
+    email: input.email,
+  });
+
   console.log(`[pay] ${pay.rzpOrder} -> ${res.name}`);
   return { ok: true as const, name: res.name };
 }
@@ -249,3 +259,4 @@ export async function sweepPayments() {
   }
   return { ordered, unpaid };
 }
+
