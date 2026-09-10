@@ -313,6 +313,36 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   var VARIANT=${JSON.stringify(numericVariant)}, QTY=${qty},
       CODE=${JSON.stringify(code)}, verified=false;
 
+  function loadRazorpay(){
+    if(window.Razorpay) return Promise.resolve();
+    return new Promise(function(resolve,reject){
+      var existing=document.querySelector('script[data-zak-rzp]');
+      if(existing){
+        existing.addEventListener('load',resolve,{once:true});
+        existing.addEventListener('error',reject,{once:true});
+        return;
+      }
+      var s=document.createElement('script');
+      s.src='https://checkout.razorpay.com/v1/checkout.js';
+      s.async=true; s.setAttribute('data-zak-rzp','1');
+      s.onload=resolve; s.onerror=reject;
+      document.head.appendChild(s);
+    });
+  }
+
+  function buyPost(body){
+    return fetch('/apps/track/buy',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(body)}).then(function(r){return r.json();});
+  }
+
+  function fireMetaPurchase(value,eventId){
+    try{
+      if(typeof window.fbq==='function'){
+        window.fbq('track','Purchase',{value:Number(value),currency:'INR'},{eventID:eventId});
+      }
+    }catch(_){}
+  }
+
   function busy(b,on){ if(!b) return; b.classList.toggle('busy',!!on); b.disabled=!!on; }
   function fail(m){ err.textContent=m; err.classList.remove('hide'); }
   function clear(){ err.classList.add('hide'); }
@@ -373,11 +403,43 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     busy(go,true);
 
     if(f.pay.value==='prepaid'){
-      // Shopify's own checkout takes it from here, discount already applied.
-      fetch('/cart/add.js',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({items:[{id:Number(VARIANT),quantity:QTY}]})})
-        .then(function(){ window.location.href='/checkout?discount='+encodeURIComponent(CODE); })
-        .catch(function(){ busy(go,false); fail('Could not open checkout. Please try again.'); });
+      var payBody={intent:'pay',variant:VARIANT,quantity:QTY,
+        firstName:f.firstName.value,lastName:f.lastName.value,address1:f.address1.value,
+        city:f.city.value,zip:digits(f.zip.value),email:f.email.value,phone:digits(ph.value),
+        discountCode:CODE,discountAmount:${JSON.stringify(off)}};
+
+      buyPost(payBody).then(function(r){
+        if(!r||!r.ok){ busy(go,false); fail((r&&r.reason)||'Could not open payment. Please try again.'); return; }
+        return loadRazorpay().then(function(){
+          if(!window.Razorpay) throw new Error('Razorpay checkout unavailable');
+          var rzp=new window.Razorpay({
+            key:r.key, amount:r.amount, currency:'INR', name:'Zakdor',
+            description:r.description||'Zakdor order', order_id:r.order,
+            prefill:{name:(String(f.firstName.value||'')+' '+String(f.lastName.value||'')).trim(),
+              email:f.email.value, contact:digits(ph.value)},
+            theme:{color:'#16181d'},
+            handler:function(resp){
+              var eventId=String(resp.razorpay_payment_id||resp.razorpay_order_id||'');
+              buyPost({intent:'paid',order:resp.razorpay_order_id,payment:resp.razorpay_payment_id,signature:resp.razorpay_signature})
+                .then(function(done){
+                  if(!done||!done.ok){ busy(go,false); fail((done&&done.reason)||'Payment was received but the order is still being confirmed.'); return; }
+                  fireMetaPurchase(Number(r.total)||0,eventId);
+                  window.location.href='/apps/track?order='+encodeURIComponent(done.name)+'&pin='+encodeURIComponent(digits(ph.value).slice(-4));
+                }).catch(function(){ busy(go,false); fail('Payment received. Please wait while we confirm your order.'); });
+            },
+            modal:{ondismiss:function(){
+              busy(go,false);
+              fail('Payment was cancelled. Your order was not placed.');
+            }}
+          });
+          rzp.on('payment.failed',function(resp){
+            busy(go,false);
+            var d=resp&&resp.error;
+            fail((d&&d.description)||'Payment failed. Please try again.');
+          });
+          rzp.open();
+        });
+      }).catch(function(){ busy(go,false); fail('Could not open payment. Please try again.'); });
       return;
     }
 
@@ -499,3 +561,4 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   return Response.json({ ok: true, name: res.name });
 };
+
