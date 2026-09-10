@@ -22,6 +22,11 @@ export async function sendMetaPurchase(input: {
   eventId: string;
   phone?: string | null;
   email?: string | null;
+  fbc?: string | null;
+  fbp?: string | null;
+  clientIpAddress?: string | null;
+  clientUserAgent?: string | null;
+  eventSourceUrl?: string | null;
 }) {
   const token = process.env.META_CAPI_ACCESS_TOKEN;
   const pixelId = process.env.META_PIXEL_ID || DEFAULT_PIXEL_ID;
@@ -31,7 +36,7 @@ export async function sendMetaPurchase(input: {
     return;
   }
 
-  const userData: Record<string, string[]> = {};
+  const userData: Record<string, string | string[]> = {};
 
   if (input.phone) {
     const phone = normalizePhone(input.phone);
@@ -43,20 +48,29 @@ export async function sendMetaPurchase(input: {
     if (email) userData.em = [sha256(email)];
   }
 
+  if (input.fbc) userData.fbc = input.fbc;
+  if (input.fbp) userData.fbp = input.fbp;
+  if (input.clientIpAddress) userData.client_ip_address = input.clientIpAddress;
+  if (input.clientUserAgent) userData.client_user_agent = input.clientUserAgent;
+
+  const event: Record<string, unknown> = {
+    event_name: "Purchase",
+    event_time: Math.floor(Date.now() / 1000),
+    event_id: String(input.eventId),
+    action_source: "website",
+    user_data: userData,
+    custom_data: {
+      value: Number(input.value),
+      currency: input.currency || "INR"
+    }
+  };
+
+  if (input.eventSourceUrl) event.event_source_url = input.eventSourceUrl;
+
   const payload = {
     test_event_code: process.env.META_TEST_EVENT_CODE || undefined,
     data: [
-      {
-        event_name: "Purchase",
-        event_time: Math.floor(Date.now() / 1000),
-        event_id: String(input.eventId),
-        action_source: "website",
-        user_data: userData,
-        custom_data: {
-          value: Number(input.value),
-          currency: input.currency || "INR"
-        }
-      }
+      event
     ]
   };
 

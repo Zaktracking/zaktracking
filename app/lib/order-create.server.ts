@@ -29,6 +29,13 @@ export type BuyerInput = {
   province?: string | null;
   zip: string;
   note?: string | null;
+  meta?: {
+    fbc?: string | null;
+    fbp?: string | null;
+    clientIpAddress?: string | null;
+    clientUserAgent?: string | null;
+    eventSourceUrl?: string | null;
+  } | null;
 };
 
 async function call(domain: string, query: string, variables: any) {

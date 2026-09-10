@@ -335,6 +335,29 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       body:JSON.stringify(body)}).then(function(r){return r.json();});
   }
 
+  function metaCookie(name){
+    try{
+      var parts=document.cookie ? document.cookie.split('; ') : [];
+      for(var i=0;i<parts.length;i++){
+        var p=parts[i].indexOf('=');
+        if(p>0 && parts[i].slice(0,p)===name){
+          return decodeURIComponent(parts[i].slice(p+1));
+        }
+      }
+    }catch(_){}
+    return '';
+  }
+
+  function metaFbc(){
+    var fbc=metaCookie('_fbc');
+    if(fbc) return fbc;
+    try{
+      var fbclid=new URLSearchParams(window.location.search).get('fbclid');
+      if(fbclid) return 'fb.1.'+Date.now()+'.'+fbclid;
+    }catch(_){}
+    return '';
+  }
+
   function fireMetaPurchase(value,eventId){
     try{
       if(typeof window.fbq==='function'){
@@ -406,7 +429,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       var payBody={intent:'pay',variant:VARIANT,quantity:QTY,
         firstName:f.firstName.value,lastName:f.lastName.value,address1:f.address1.value,
         city:f.city.value,zip:digits(f.zip.value),email:f.email.value,phone:digits(ph.value),
-        discountCode:CODE,discountAmount:${JSON.stringify(off)}};
+        discountCode:CODE,discountAmount:${JSON.stringify(off)},
+        meta:{
+          fbc:metaFbc(),
+          fbp:metaCookie('_fbp'),
+          eventSourceUrl:window.location.href
+        }};
 
       buyPost(payBody).then(function(r){
         if(!r||!r.ok){ busy(go,false); fail((r&&r.reason)||'Could not open payment. Please try again.'); return; }
@@ -518,6 +546,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return Response.json({ ok: false, reason: "Please confirm your mobile number first" });
   }
 
+  const clientIpAddress =
+    request.headers.get("cf-connecting-ip") ||
+    request.headers.get("x-real-ip") ||
+    request.headers.get("true-client-ip") ||
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    null;
+  const clientUserAgent = request.headers.get("user-agent") || null;
+
   const buyer = {
     items,
     firstName: String(d.firstName).trim().slice(0, 60),
@@ -528,6 +564,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     city: String(d.city).trim().slice(0, 60),
     province,
     zip,
+    meta: {
+      fbc: typeof d.meta?.fbc === "string" ? d.meta.fbc.slice(0, 500) : null,
+      fbp: typeof d.meta?.fbp === "string" ? d.meta.fbp.slice(0, 500) : null,
+      eventSourceUrl: typeof d.meta?.eventSourceUrl === "string"
+        ? d.meta.eventSourceUrl.slice(0, 2000)
+        : null,
+      clientIpAddress,
+      clientUserAgent,
+    },
   };
 
   /* Pay online: nothing is written yet. Razorpay is opened for the exact

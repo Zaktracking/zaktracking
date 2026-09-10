@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Paying online inside the popup, start to finish.
  *
  *   1. start    - the popup says what is being bought and where it goes.
@@ -191,6 +191,11 @@ export async function finishPayment(shop: any, pay: any, p: RzpPayment) {
     eventId: p.id,
     phone: input.phone,
     email: input.email,
+    fbc: input.meta?.fbc,
+    fbp: input.meta?.fbp,
+    clientIpAddress: input.meta?.clientIpAddress,
+    clientUserAgent: input.meta?.clientUserAgent,
+    eventSourceUrl: input.meta?.eventSourceUrl,
   });
 
   console.log(`[pay] ${pay.rzpOrder} -> ${res.name}`);
