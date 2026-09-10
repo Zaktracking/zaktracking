@@ -44,6 +44,7 @@ export async function sendMetaPurchase(input: {
   }
 
   const payload = {
+    test_event_code: process.env.META_TEST_EVENT_CODE || undefined,
     data: [
       {
         event_name: "Purchase",
@@ -88,3 +89,4 @@ export async function sendMetaPurchase(input: {
     );
   }
 }
+
